@@ -177,3 +177,162 @@ class UserCabinetViewTest(TestCase):
 
         self.user.refresh_from_db()
         self.assertEqual(self.user.email, "ivan@example.com")
+
+
+class UserUpdateSecurityTest(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(
+            username="owner",
+            email="owner@example.com",
+            password="OldPass12345!",
+            role="user",
+            first_name="Owner",
+        )
+        self.other_user = User.objects.create_user(
+            username="other",
+            email="other@example.com",
+            password="OtherPass12345!",
+            role="user",
+            first_name="Other",
+        )
+
+    def profile_payload(self, **overrides: str) -> dict[str, str]:
+        payload = {
+            "first_name": "Updated",
+            "last_name": "User",
+            "email": "updated@example.com",
+            "bio": "Updated bio",
+            "avatar_image": "https://example.com/avatar.jpg",
+            "password1": "NewPass12345!",
+            "password2": "NewPass12345!",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_user_can_update_own_profile_and_password_without_logout(
+        self,
+    ) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse(
+                "users:user_update",
+                kwargs={"username": self.user.username},
+            ),
+            data=self.profile_payload(),
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Updated")
+        self.assertTrue(self.user.check_password("NewPass12345!"))
+        self.assertEqual(get_user(self.client).pk, self.user.pk)
+
+    def test_user_cannot_update_someone_elses_profile(self) -> None:
+        self.client.force_login(self.user)
+        original_email = self.other_user.email
+        original_password = self.other_user.password
+
+        response = self.client.post(
+            reverse(
+                "users:user_update",
+                kwargs={"username": self.other_user.username},
+            ),
+            data=self.profile_payload(email="attacker@example.com"),
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.other_user.refresh_from_db()
+        self.assertEqual(self.other_user.email, original_email)
+        self.assertEqual(self.other_user.password, original_password)
+
+    def test_anonymous_user_is_redirected_from_profile_update(self) -> None:
+        response = self.client.post(
+            reverse(
+                "users:user_update",
+                kwargs={"username": self.user.username},
+            ),
+            data=self.profile_payload(),
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:login"),
+            fetch_redirect_response=False,
+        )
+
+
+class AvatarChangeSecurityTest(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(
+            username="owner",
+            email="owner@example.com",
+            password="OwnerPass12345!",
+            role="user",
+            avatar_image="https://example.com/old.jpg",
+        )
+        self.other_user = User.objects.create_user(
+            username="other",
+            email="other@example.com",
+            password="OtherPass12345!",
+            role="user",
+            avatar_image="https://example.com/other-old.jpg",
+        )
+
+    def avatar_url(self, username: str) -> str:
+        return reverse("users:avatar_update", kwargs={"username": username})
+
+    def test_user_can_change_own_avatar(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            self.avatar_url(self.user.username),
+            data={"avatar_image": "https://example.com/new.jpg"},
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_image, "https://example.com/new.jpg")
+
+    def test_user_cannot_change_someone_elses_avatar(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            self.avatar_url(self.other_user.username),
+            data={"avatar_image": "javascript:alert(1)"},
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.other_user.refresh_from_db()
+        self.assertEqual(
+            self.other_user.avatar_image,
+            "https://example.com/other-old.jpg",
+        )
+
+    def test_anonymous_user_is_redirected_from_avatar_change(self) -> None:
+        response = self.client.post(
+            self.avatar_url(self.user.username),
+            data={"avatar_image": "https://example.com/new.jpg"},
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:login"),
+            fetch_redirect_response=False,
+        )
