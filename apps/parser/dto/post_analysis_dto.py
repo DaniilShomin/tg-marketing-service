@@ -24,6 +24,7 @@ class PostDataDTO(BaseModel):
     is_pinned: bool
     media_type: str
     permalink: Optional[str] = None
+    er: float
     reactions: Dict[str, Any]
     post_analysis: PostAnalysisDTO
 

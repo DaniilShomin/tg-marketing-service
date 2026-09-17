@@ -344,6 +344,8 @@ class Post(models.Model):
         Метод для API/Сериализатора.
         Возвращает объект, содержащий общую сумму и список (top-N)
         """
+        total = self.total_reactions()
+
         reactions_qs = self.reactions.values("emoji", "count").order_by(
             "-count"
         )
@@ -351,10 +353,33 @@ class Post(models.Model):
         if limit is not None:
             reactions_qs = reactions_qs[:limit]
 
+        details = []
+        for item in reactions_qs:
+            count = item["count"]
+            # Расчет процента с защитой от деления на ноль
+            percent = round((count / total * 100), 2) if total > 0 else 0.0
+            details.append(
+                {"emoji": item["emoji"], "count": count, "percent": percent}
+            )
+
         return {
-            "total": self.total_reactions(),
-            "details": list(reactions_qs),
+            "total": total,
+            "details": details,
         }
+
+    def calculate_er(self) -> float:
+        """
+        Вычисляет Engagement Rate относительно просмотров.
+        Формула: (reactions + comments + forwards) / views
+        """
+        total_interactions = (
+            self.total_reactions() + self.comments_count + self.forwards
+        )
+
+        if self.views <= 0:
+            return 0.0
+
+        return round(total_interactions / self.views, 4)
 
     def __str__(self):
         return f"Post #{self.telegram_message_id} in {self.channel}"
