@@ -1,7 +1,7 @@
 from typing import Any, cast
 
 from django.contrib import auth, messages
-from django.contrib.auth import login
+from django.contrib.auth import login, update_session_auth_hash
 from django.contrib.auth.tokens import default_token_generator
 from django.http import (
     HttpRequest,
@@ -187,6 +187,7 @@ class UserCabinetView(UserAuthenticationCheckMixin, View):
             if form.is_valid():
                 try:
                     form.save()
+                    update_session_auth_hash(request, user)
                     messages.add_message(
                         request, messages.SUCCESS, "Профиль успешно изменен"
                     )
@@ -366,10 +367,17 @@ class UserUpdate(UserAuthenticationCheckMixin, View):
         **kwargs: Any,
     ) -> InertiaResponse | HttpResponseRedirect:
         username = kwargs.get("username")
-        user = User.objects.get(username=username)
+        user = cast(User, request.user)
+        if user.username != username:
+            request.session["flash"] = {
+                "error": "У вас нет прав для изменения другого пользователя."
+            }
+            return redirect(reverse("users:user_cabinet"))
+
         form = UserUpdateForm(data=request.POST, instance=user)
         if form.is_valid():
             form.save()
+            update_session_auth_hash(request, user)
             request.session["flash"] = {"success": "Профиль успешно изменен."}
             return redirect(reverse("users:user_cabinet"))
 
@@ -390,7 +398,7 @@ class UserUpdate(UserAuthenticationCheckMixin, View):
         )
 
 
-class AvatarChangeView(View):
+class AvatarChangeView(UserAuthenticationCheckMixin, View):
     def post(
         self,
         request: HttpRequest,
@@ -398,7 +406,12 @@ class AvatarChangeView(View):
         **kwargs: Any,
     ) -> HttpResponseRedirect:
         username = kwargs.get("username")
-        user = User.objects.get(username=username)
+        user = request.user
+        if user.username != username:
+            request.session["flash"] = {
+                "error": "У вас нет прав для изменения другого пользователя."
+            }
+            return redirect(reverse("users:user_cabinet"))
         avatar_form = AvatarChange(data=request.POST, instance=user)
         if avatar_form.is_valid():
             avatar_form.save()

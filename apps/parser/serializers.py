@@ -13,6 +13,7 @@ class PostSerializer:
     @classmethod
     def get_post_data(cls, post: Post) -> dict:
         breakdown = post.get_reactions_breakdown()
+        er = post.calculate_er()
 
         """
         Словарь пропсов для фронтенда (Inertia.js):
@@ -83,6 +84,7 @@ class PostSerializer:
             "telegram_message_id": post.telegram_message_id,
             "channel_id": post.channel.id,
             "text": post.text,
+            "hashtags": post.hashtags,
             "published_at": post.published_at.isoformat(),
             "views": post.views,
             "forwards": post.forwards,
@@ -90,6 +92,7 @@ class PostSerializer:
             "is_pinned": post.is_pinned,
             "media_type": post.media_type,
             "permalink": post.permalink,
+            "er": er,
             "reactions": {
                 "total": breakdown["total"],
                 "details": breakdown["details"],
