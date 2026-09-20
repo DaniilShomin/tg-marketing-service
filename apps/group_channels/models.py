@@ -110,6 +110,7 @@ class Group(models.Model):
             "slug": self.slug,
             "description": self.description,
             "owner": self.owner.username,
+            "image_url": self.image_url,
             "cover": self.image_url,
             "curator": (self.curator.username if self.curator else None),
             "is_editorial": self.is_editorial,
