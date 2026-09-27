@@ -23,6 +23,9 @@ import { useNavigate } from "react-router-dom";
 import { mockReactions, MOCK_ANALYSIS_DATA } from "@/shared/mocks/posts";
 import type { PostPageProps, PostAnalysis } from "@/types/post";
 
+// TODO: Pages должны быть максимально простыми и которкими, 
+// Компоненты, из которых состоит страница, необходимо вынести в отдельные файлы.
+
 const PostPage: React.FC<PostPageProps> = ({
  reactions = mockReactions,
  analysis: propAnalysis = MOCK_ANALYSIS_DATA,
@@ -30,6 +33,8 @@ const PostPage: React.FC<PostPageProps> = ({
  const navigate = useNavigate();
 
  const [analysis, setAnalysis] = useState<PostAnalysis | null>(null);
+
+//  TODO: когда моковые данные заменятся на данные с бекенда, нужно будет добавить обработку ошибок
 
  const handleStartAnalysis = () => {
   const baseData = propAnalysis || MOCK_ANALYSIS_DATA;
