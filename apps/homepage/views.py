@@ -1,3 +1,6 @@
+from typing import Any
+
+from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect
 from django.views import View
 from inertia import render as inertia_render
@@ -82,11 +85,13 @@ class DashboardView(View):
     - ai_insights: до 5 непрочитанных из БД или сгенерированных fallback
     - engagement: процент (views / subscribers * 100)
     - growth: процентный рост подписчиков за последний период
-    - days_left: 0 для неактивной подписки, иначе 30 (пример)
+    - days_left: дней до конца текущего периода подписки (Subscription)
     - is_auto: признак автоматической/ручной коллекции
     """
 
-    def get(self, request, *args, **kwargs):
+    def get(
+        self, request: HttpRequest, *args: Any, **kwargs: Any
+    ) -> HttpResponse:
         if not request.user.is_authenticated:
             return redirect("main_index")
 

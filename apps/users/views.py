@@ -1,18 +1,29 @@
 import json
+from typing import Any, cast
 
 from django.contrib import auth, messages
-from django.contrib.auth import login
+from django.contrib.auth import login, update_session_auth_hash
 from django.contrib.auth.tokens import default_token_generator
-from django.db.models import Count
-from django.http import HttpResponse
+from django.http import (
+    HttpRequest,
+    HttpResponse,
+    HttpResponseRedirect,
+)
 from django.shortcuts import redirect
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.utils.http import urlsafe_base64_decode
+from django.views.decorators.debug import sensitive_post_parameters
 from django.views.generic.base import View
+from inertia import InertiaResponse
 from inertia import render as inertia_render
 
+from apps.billing.services.subscription_service import (
+    get_subscription,
+    serialize_subscription,
+)
 from apps.users.forms import (
     AvatarChange,
     RestorePasswordForm,
@@ -21,6 +32,7 @@ from apps.users.forms import (
     UserRegForm,
     UserUpdateForm,
 )
+from apps.users.middleware import RoleRequest
 from apps.users.models import DataSubjectRequestLog, User
 from apps.users.personal_data_export import build_personal_data_export
 from config.mixins import UserAuthenticationCheckMixin
@@ -32,29 +44,38 @@ DEFAULT_AVATAR_URL = static("users/default-avatar.svg")
 class PersonalDataExportView(UserAuthenticationCheckMixin, View):
     """Download personal data belonging to the authenticated subject."""
 
-    def get(self, request, *args, **kwargs):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponse:
         return self._export(request)
 
-    def post(self, request, *args, **kwargs):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponse:
         return self._export(request)
 
-    def _export(self, request):
+    def _export(self, request: HttpRequest) -> HttpResponse:
+        user = cast(User, request.user)
         exported_at = timezone.now()
-        payload = build_personal_data_export(request.user, exported_at)
+        payload = build_personal_data_export(user, exported_at)
         content = json.dumps(payload, ensure_ascii=False, indent=2)
 
         DataSubjectRequestLog.objects.create(
-            subject=request.user,
-            subject_id_snapshot=request.user.pk,
+            subject=user,
+            subject_id_snapshot=user.pk,
             request_type=DataSubjectRequestLog.RequestType.EXPORT,
             http_method=request.method,
             status=DataSubjectRequestLog.Status.COMPLETED,
             completed_at=exported_at,
         )
 
-        filename = (
-            f"personal-data-{request.user.pk}-{exported_at:%Y-%m-%d}.json"
-        )
+        filename = f"personal-data-{user.pk}-{exported_at:%Y-%m-%d}.json"
         response = HttpResponse(
             content,
             content_type="application/json; charset=utf-8",
@@ -67,17 +88,33 @@ class PersonalDataExportView(UserAuthenticationCheckMixin, View):
 
 
 class LogoutView(UserAuthenticationCheckMixin, View):
-    def get(self, request, *args, **kwargs):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponseRedirect:
         return redirect(reverse("main_index"))
 
-    def post(self, request, *args, **kwargs):
+    def post(
+        self, request: HttpRequest, *args: Any, **kwargs: Any
+    ) -> HttpResponseRedirect:
         messages.add_message(request, messages.INFO, "Вы разлогинены")
         auth.logout(request)
         return redirect(reverse("main_index"))
 
 
+@method_decorator(
+    sensitive_post_parameters("password"),
+    name="post",
+)
 class LoginView(View):
-    def get(self, request, *args, **kwargs):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse:
         # возвращаем форму
         return inertia_render(
             request,
@@ -87,7 +124,12 @@ class LoginView(View):
             },
         )
 
-    def post(self, request, *args, **kwargs):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse:
         form = UserLoginForm(request, request.POST)
 
         # валидируем данные
@@ -125,48 +167,20 @@ class LoginView(View):
             )
 
 
-class UserProfileView(UserAuthenticationCheckMixin, View):
-    def get(self, request, *args, **kwargs):
-        user = request.user
-        groups = user.owned_groups.annotate(
-            annotated_saves_count=Count("saves"),
-        )
-
-        user_data = {
-            "id": request.user.id,
-            "username": request.user.username,
-            "full_name": request.user.get_full_name(),
-            "email": request.user.email,
-            "avatar": request.user.avatar_image,
-            "role": request.user.role,
-            "bio": request.user.bio,
-            "is_active": request.user.is_active,
-        }
-
-        groups_data = [group.get_data() for group in groups]
-
-        create_form_data = {"name": "", "description": "", "image_url": ""}
-
-        update_form_data = {"name": "", "description": "", "image_url": ""}
-
-        return inertia_render(
-            request,
-            "UserProfilePage",
-            props={
-                "user": user_data,
-                "groups": groups_data,
-                "form": {
-                    "create_form": create_form_data,
-                    "update_form": update_form_data,
-                    "avatar_form": {"avatar": ""},
-                },
-                "errors": {},
-            },
-        )
-
-
 class UserCabinetView(UserAuthenticationCheckMixin, View):
-    def _build_base_props(self, request, user: User) -> dict:
+    """
+    Account page view.
+
+    component: UserProfilePage
+    props: user, subscription, notifications, usage_stats, user_role
+    url: /auth/profile/
+    """
+
+    def _build_base_props(
+        self,
+        request: HttpRequest,
+        user: User,
+    ) -> dict[str, Any]:
         registration_date = user.date_joined
         last_visit = user.last_login if user.last_login else timezone.now()
         total_hours = (last_visit - registration_date).total_seconds() / 3600
@@ -182,35 +196,38 @@ class UserCabinetView(UserAuthenticationCheckMixin, View):
 
         return {
             "user": {
+                "id": user.id,
                 "first_name": user.first_name,
+                "last_name": user.last_name,
+                "username": user.username,
                 "email": user.email,
+                "avatar": user.avatar_image,
+                "role": user.role,
+                "bio": user.bio,
             },
-            "subscription": {
-                "plan": "Pro",
-                "price": "$29",
-                "period": "в месяц",
-                "channels_used": 47,
-                "channels_limit": 100,
-                "ai_requests_used": 234,
-                "ai_requests_limit": 1000,
-            },
-            "notifications": {
-                "weekly_reports": True,
-                "trend_notifications": True,
-                "limit_exceeded": False,
-                "new_features": True,
-            },
+            "subscription": serialize_subscription(get_subscription(user)),
+            "notifications": None,
             "usage_stats": usage_stats,
-            "user_role": request.role,  # Используем атрибут из middleware
+            "user_role": cast(RoleRequest, request).role,
         }
 
-    def get(self, request, *args, **kwargs):
-        user = request.user
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse:
+        user = cast(User, request.user)
         props = self._build_base_props(request, user)
         return inertia_render(request, "UserProfilePage", props=props)
 
-    def post(self, request, *args, **kwargs):
-        user = request.user
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
+        user = cast(User, request.user)
         action = request.POST.get("action")
 
         if action == "notifications":
@@ -223,6 +240,7 @@ class UserCabinetView(UserAuthenticationCheckMixin, View):
             if form.is_valid():
                 try:
                     form.save()
+                    update_session_auth_hash(request, user)
                     messages.add_message(
                         request, messages.SUCCESS, "Профиль успешно изменен"
                     )
@@ -238,13 +256,20 @@ class UserCabinetView(UserAuthenticationCheckMixin, View):
                 props["errors"] = form.errors.get_json_data()
                 props["values"] = {
                     "first_name": request.POST.get("first_name", ""),
+                    "last_name": request.POST.get("last_name", ""),
                     "email": request.POST.get("email", ""),
+                    "bio": request.POST.get("bio", ""),
+                    "avatar_image": request.POST.get("avatar_image", ""),
                 }
                 return inertia_render(request, "UserProfilePage", props=props)
 
         return redirect(reverse("users:user_cabinet"))
 
 
+@method_decorator(
+    sensitive_post_parameters("password1", "password2"),
+    name="post",
+)
 class UserRegister(View):
     form_fields = (
         "first_name",
@@ -256,10 +281,10 @@ class UserRegister(View):
         "avatar_image",
     )
 
-    def _empty_form_data(self):
+    def _empty_form_data(self) -> dict[str, str]:
         return {field: "" for field in self.form_fields}
 
-    def _bound_form_data(self, request):
+    def _bound_form_data(self, request: HttpRequest) -> dict[str, str]:
         data = self._empty_form_data()
         data.update(
             {field: request.POST.get(field, "") for field in self.form_fields}
@@ -268,7 +293,11 @@ class UserRegister(View):
         data["password2"] = ""
         return data
 
-    def _form_props(self, data=None, errors=None):
+    def _form_props(
+        self,
+        data: dict[str, str] | None = None,
+        errors: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return {
             "form": {
                 "data": data or self._empty_form_data(),
@@ -276,14 +305,24 @@ class UserRegister(View):
             }
         }
 
-    def get(self, request):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse:
         return inertia_render(
             request,
             "FormRegistration",
             props=self._form_props(),
         )
 
-    def post(self, request, *args, **kwargs):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
         form = UserRegForm(data=request.POST)
         if form.is_valid():
             user = form.save(commit=False)
@@ -347,17 +386,23 @@ class UserUpdate(UserAuthenticationCheckMixin, View):
 
     """
 
-    def get(self, request, *args, **kwargs):
-        if request.user.username == kwargs.get("username"):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
+        user = cast(User, request.user)
+        if user.username == kwargs.get("username"):
             data = {
-                "first_name": request.user.first_name,
-                "last_name": request.user.last_name,
-                "username": request.user.username,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "username": user.username,
                 "password1": "",
                 "password2": "",
-                "email": request.user.email,
-                "bio": request.user.bio,
-                "avatar_image": request.user.avatar_image,
+                "email": user.email,
+                "bio": user.bio,
+                "avatar_image": user.avatar_image,
             }
             return inertia_render(
                 request, "UpdateUserProfile", props={"form": data, "errors": {}}
@@ -366,16 +411,28 @@ class UserUpdate(UserAuthenticationCheckMixin, View):
         request.session["flash"] = {
             "error": "У вас нет прав для изменения другого пользователя."
         }
-        return redirect(reverse("users:profile"))
+        return redirect(reverse("users:user_cabinet"))
 
-    def post(self, request, *args, **kwargs):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
         username = kwargs.get("username")
-        user = User.objects.get(username=username)
+        user = cast(User, request.user)
+        if user.username != username:
+            request.session["flash"] = {
+                "error": "У вас нет прав для изменения другого пользователя."
+            }
+            return redirect(reverse("users:user_cabinet"))
+
         form = UserUpdateForm(data=request.POST, instance=user)
         if form.is_valid():
             form.save()
+            update_session_auth_hash(request, user)
             request.session["flash"] = {"success": "Профиль успешно изменен."}
-            return redirect(reverse("users:profile"))
+            return redirect(reverse("users:user_cabinet"))
 
         data = {
             "first_name": user.first_name,
@@ -394,19 +451,30 @@ class UserUpdate(UserAuthenticationCheckMixin, View):
         )
 
 
-class AvatarChangeView(View):
-    def post(self, request, *args, **kwargs):
+class AvatarChangeView(UserAuthenticationCheckMixin, View):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponseRedirect:
         username = kwargs.get("username")
-        user = User.objects.get(username=username)
+        user = request.user
+        if user.username != username:
+            request.session["flash"] = {
+                "error": "У вас нет прав для изменения другого пользователя."
+            }
+            return redirect(reverse("users:user_cabinet"))
         avatar_form = AvatarChange(data=request.POST, instance=user)
         if avatar_form.is_valid():
             avatar_form.save()
             request.session["flash"] = {"success": "Аватар успешно изменен"}
-            return redirect(reverse("users:profile"))
-        if avatar_form.errors.get("avatar_url"):
-            avatar_url = avatar_form.errors.get("avatar_url").as_text()
+            return redirect(reverse("users:user_cabinet"))
+        avatar_error = avatar_form.errors.get("avatar_url")
+        if avatar_error is not None:
+            avatar_url = avatar_error.as_text()
             request.session["flash"] = {"error": f"{avatar_url[1:]}"}
-        return redirect(reverse("users:profile"))
+        return redirect(reverse("users:user_cabinet"))
 
 
 class RestorePasswordRequestView(View):
@@ -424,12 +492,22 @@ class RestorePasswordRequestView(View):
     }
     """
 
-    def get(self, request, *args, **kwargs):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
         return inertia_render(
             request, "RestorePasswordRequest", props={"email": ""}
         )
 
-    def post(self, request, *args, **kwargs):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
         form = RestorePasswordRequestForm(data=request.POST)
         if form.is_valid():
             form.save(
@@ -454,6 +532,13 @@ class RestorePasswordRequestView(View):
         )
 
 
+@method_decorator(
+    sensitive_post_parameters(
+        "new_password1",
+        "new_password2",
+    ),
+    name="post",
+)
 class RestorePasswordView(View):
     """
     Метод get возвращает props
@@ -475,7 +560,12 @@ class RestorePasswordView(View):
     }
     """
 
-    def get(self, request, *args, **kwargs):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
         try:
             uid = kwargs["uidb64"]
         except KeyError:
@@ -519,7 +609,12 @@ class RestorePasswordView(View):
             },
         )
 
-    def post(self, request, *args, **kwargs):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse | HttpResponseRedirect:
         try:
             uid = kwargs["uidb64"]
         except KeyError:

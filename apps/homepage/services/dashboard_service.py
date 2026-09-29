@@ -1,5 +1,6 @@
-from django.db.models import Avg, OuterRef, Subquery
+from django.db.models import Avg, OuterRef, QuerySet, Subquery
 
+from apps.billing.services.subscription_service import get_subscription
 from apps.group_channels.models import Group
 from apps.homepage.dto.dashboard_dto import (
     ChannelDTO,
@@ -9,10 +10,11 @@ from apps.homepage.dto.dashboard_dto import (
     StatsDTO,
 )
 from apps.parser.models import AIInsight, ChannelStats, TelegramChannel
+from apps.users.models import User
 
 
 class DashboardService:
-    def __init__(self, user):
+    def __init__(self, user: User) -> None:
         self.user = user
 
     # 🔹 публичный метод
@@ -37,7 +39,7 @@ class DashboardService:
     # QuerySet
     # ------------------------
 
-    def _get_channels_queryset(self):
+    def _get_channels_queryset(self) -> QuerySet[TelegramChannel]:
         latest_stats = ChannelStats.objects.filter(
             channel=OuterRef("pk")
         ).order_by("-parsed_at")
@@ -54,7 +56,7 @@ class DashboardService:
     # Stats
     # ------------------------
 
-    def _build_stats(self, qs):
+    def _build_stats(self, qs: QuerySet[TelegramChannel]) -> StatsDTO:
         channels_count = qs.count()
 
         posts_count = sum(len(c.last_messages or []) for c in qs)
@@ -72,7 +74,9 @@ class DashboardService:
     # Channels
     # ------------------------
 
-    def _build_channels(self, qs):
+    def _build_channels(
+        self, qs: QuerySet[TelegramChannel]
+    ) -> list[ChannelDTO]:
         result = []
 
         for c in qs[:5]:
@@ -83,7 +87,7 @@ class DashboardService:
             engagement = (views / subscribers) * 100 if subscribers > 0 else 0
 
             # ✔ рост
-            growth = c.latest_growth or 0
+            growth = getattr(c, "latest_growth", 0) or 0
 
             growth_percent = (
                 (growth / max(1, subscribers - growth)) * 100 if growth else 0
@@ -97,6 +101,7 @@ class DashboardService:
                     views=views,
                     engagement=round(engagement, 2),
                     growth=round(growth_percent, 2),
+                    is_verified=c.is_verified,
                 )
             )
 
@@ -106,7 +111,9 @@ class DashboardService:
     # AI insights
     # ------------------------
 
-    def _build_insights(self, qs):
+    def _build_insights(
+        self, qs: QuerySet[TelegramChannel]
+    ) -> list[InsightDTO]:
         insights_qs = AIInsight.objects.filter(
             user=self.user, is_read=False
         ).order_by("-created_at")[:5]
@@ -121,10 +128,11 @@ class DashboardService:
         result = []
 
         for c in qs[:3]:
-            if c.latest_growth and c.latest_growth > 50:
+            latest_growth = getattr(c, "latest_growth", 0) or 0
+            if latest_growth > 50:
                 result.append(
                     InsightDTO(
-                        text=f"Канал «{c.title}» растёт (+{c.latest_growth})",
+                        text=f"Канал «{c.title}» растёт (+{latest_growth})",
                         type="positive",
                     )
                 )
@@ -149,7 +157,7 @@ class DashboardService:
     # Collections
     # ------------------------
 
-    def _build_collections(self):
+    def _build_collections(self) -> list[CollectionDTO]:
         groups = Group.objects.filter(owner=self.user)
 
         result = [
@@ -182,8 +190,5 @@ class DashboardService:
     # Utils
     # ------------------------
 
-    def _get_subscription_days_left(self):
-        profile = getattr(self.user, "partner_profile", None)
-        if profile and profile.status == "active":
-            return 30
-        return 0
+    def _get_subscription_days_left(self) -> int:
+        return get_subscription(self.user).days_left

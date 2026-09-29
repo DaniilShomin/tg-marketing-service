@@ -5,6 +5,8 @@ from asgiref.sync import async_to_sync
 from django.contrib import messages
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.middleware.csrf import get_token
+from django.shortcuts import get_object_or_404
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.views.generic import DetailView, FormView, ListView, View
@@ -12,9 +14,16 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from apps.parser.dto.channel_dto import ChannelDTO, ChannelListDTO
+from apps.parser.dto.post_analysis_dto import PostDataDTO, PostPagePropsDTO
 from apps.parser.forms import ChannelParseForm
-from apps.parser.models import ChannelStats, TelegramChannel
+from apps.parser.models import ChannelStats, Post, TelegramChannel
 from apps.parser.parser import tg_parser
+from apps.parser.serializers import PostSerializer
+from apps.parser.types import (
+    ChannelDataForSave,
+    ParsedChannelResult,
+    normalize_channel_data,
+)
 from apps.parser.utils import get_telegram_credentials
 from config.mixins import UserAuthenticationCheckMixin
 from config.renderers import render_inertia_from_dto
@@ -40,7 +49,7 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
 
     async def async_tg_parser(
         self, url: str, limit: int = 10
-    ) -> dict[str, Any]:
+    ) -> ParsedChannelResult:
         """Parser wrapper"""
         client = self.get_telegram_client()
         await client.connect()
@@ -50,7 +59,7 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
             await client.disconnect()
 
     def save_channel(
-        self, data: dict[str, Any]
+        self, data: ChannelDataForSave
     ) -> tuple[TelegramChannel, bool]:
         """Create or update channel"""
         channel, created = TelegramChannel.objects.update_or_create(
@@ -77,7 +86,7 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
         return channel, created
 
     def save_stats(
-        self, channel: TelegramChannel, data: dict[str, Any]
+        self, channel: TelegramChannel, data: ChannelDataForSave
     ) -> None:
         """Create stats record with growth calculation"""
         last_stats = (
@@ -125,18 +134,24 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
             # Start async parsing function
             async_parser = async_to_sync(self.async_tg_parser)
             parsed_data = async_parser(identifier, limit)
-            parsed_data.update(
+            if parsed_data is None:
+                form.add_error(None, "Не удалось получить данные канала")
+                return self.form_invalid(form)
+            channel_data = ChannelDataForSave(
+                **normalize_channel_data(parsed_data)
+            )
+            channel_data.update(
                 {"language": language, "country": country, "category": category}
             )
 
             log.info(
                 f"Парсинг завершен для канала: "
-                f"{parsed_data['title']} ({parsed_data['channel_id']})"
+                f"{channel_data['title']} ({channel_data['channel_id']})"
             )
 
             # Saving data
-            channel, created = self.save_channel(parsed_data)
-            self.save_stats(channel, parsed_data)
+            channel, created = self.save_channel(channel_data)
+            self.save_stats(channel, channel_data)
 
             # Generating user message
             message = (
@@ -226,11 +241,60 @@ class ChannelLookupView(View):
             )
         )
 
-        # Временно заглушка, пока в модели TelegramChannel нету аватарки
-        for item in result:
-            item["avatar"] = None
-
         return JsonResponse(result, safe=False)
 
 
-# Create your views here.
+class PostAIAnalysisView(View):
+    def get(self, request, channel_id, post_id):
+        post = get_object_or_404(
+            Post, channel_id=channel_id, telegram_message_id=post_id
+        )
+
+        # Чистый словарь из сериализатора
+        post_data_dict = PostSerializer.get_post_data(post)
+
+        props = PostPagePropsDTO(post=PostDataDTO(**post_data_dict))
+
+        return render_inertia_from_dto(
+            request,
+            "PostPage",
+            props=props,
+        )
+
+
+class PostDetailView(View):
+    """
+    Отображает страницу детального разбора поста.
+    Component: PostPage
+    Props:
+        post (PostDataDTO): Полные данные поста (text, hashtags, метрики)
+        channel (dict): Сводка по каналу, включающая основные параметры.
+        csrfToken (str): CSRF токен для безопасности.
+    URL:
+        /post/<channel_id>/<telegram_message_id>/
+    """
+
+    def get(
+        self, request: HttpRequest, channel_id: int, telegram_message_id: int
+    ) -> HttpResponse:
+        post = get_object_or_404(
+            Post.objects.select_related("channel"),
+            channel_id=channel_id,
+            telegram_message_id=telegram_message_id,
+        )
+
+        post_data_dict = PostSerializer.get_post_data(post)
+
+        post_dto = PostDataDTO(**post_data_dict)
+
+        channel_data = post.channel.get_data()
+
+        props = PostPagePropsDTO(
+            post=post_dto, channel=channel_data, csrfToken=get_token(request)
+        )
+
+        return render_inertia_from_dto(
+            request,
+            "PostPage",
+            props=props,
+        )

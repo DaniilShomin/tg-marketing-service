@@ -1,4 +1,4 @@
-# Telegram Marketing Service
+# Telegram Marketing Service.
 
 **SPA-веб-приложение** для сбора, сравнения и анализа Telegram-каналов: парсит каналы, копит статистику (подписчики, просмотры, динамика роста), объединяет их в тематические подборки и даёт пользователям аналитику и AI-инсайты.
 
@@ -195,7 +195,17 @@ make lint       # ruff
 make lint-fix   # ruff check --fix
 ```
 
-## Полезные команды Make
+### Pre-commit
+
+Pre-commit автоматически проверяет код перед каждым коммитом (ruff lint + format). Установите hooks один раз:
+
+```sh
+uv run pre-commit install
+```
+
+Подробнее об использовании и обходе ошибок — в [`PRE-COMMIT.md`](PRE-COMMIT.md).
+
+## Полезные команды Make 
 
 | Команда | Действие |
 |---------|----------|
@@ -207,5 +217,3 @@ make lint-fix   # ruff check --fix
 | `make s` | Генерация Telegram-сессии |
 | `make redis` / `make celery` / `make celery-beat` / `make flower` | Фоновые задачи |
 | `make test` / `make lint` / `make lint-fix` | Тесты и линтер |
-
- 

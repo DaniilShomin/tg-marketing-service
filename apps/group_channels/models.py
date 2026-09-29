@@ -1,3 +1,5 @@
+from typing import Any
+
 from django.core.validators import URLValidator
 from django.db import models
 from django.utils.text import slugify
@@ -31,6 +33,15 @@ class Group(models.Model):
         related_query_name="owned_group",
         verbose_name="Владелец",
     )
+    curator = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="curated_groups",
+        related_query_name="curated_group",
+        verbose_name="Куратор",
+        blank=True,
+        null=True,
+    )
     is_editorial = models.BooleanField(
         default=False,
         verbose_name="Редакторская подборка",
@@ -50,6 +61,14 @@ class Group(models.Model):
         blank=True,
         verbose_name="обложка группы",
     )
+    saves_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Количество сохранений",
+    )
+    views_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Количество просмотров",
+    )
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name="Создана",
@@ -60,22 +79,27 @@ class Group(models.Model):
         verbose_name = "Группа"
         verbose_name_plural = "Группы"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
-    def save(self, *args, **kwargs):
+    def save(self, *args: Any, **kwargs: Any) -> None:
         if not self.slug or not self.slug.strip():
             self.slug = slugify(unidecode(self.name))
         super().save(*args, **kwargs)
 
     @property
-    def saves_count(self):
-        if hasattr(self, "annotated_saves_count"):
-            return self.annotated_saves_count
+    def channel_count(self) -> int:
+        if hasattr(self, "annotated_channel_count"):
+            return self.annotated_channel_count
 
-        return self.saves.count()
+        if hasattr(self, "auto_rule"):
+            return self.channels.model.objects.filter(
+                category=self.auto_rule.category
+            ).count()
 
-    def get_data(self):
+        return self.channels.count()
+
+    def get_data(self) -> dict[str, Any]:
         """
         Метод возвращает представление данных группы в виде словаря,
         пригодного для передачи на фронтенд (Inertia.js).
@@ -86,11 +110,15 @@ class Group(models.Model):
             "slug": self.slug,
             "description": self.description,
             "owner": self.owner.username,
+            "image_url": self.image_url,
+            "cover": self.image_url,
+            "curator": (self.curator.username if self.curator else None),
             "is_editorial": self.is_editorial,
             "order": self.order,
-            "image_url": self.image_url,
+            "channel_count": self.channel_count,
             "created_at": self.created_at.isoformat(),
             "saves_count": self.saves_count,
+            "views_count": self.views_count,
         }
 
 
@@ -120,7 +148,7 @@ class SavedCollection(models.Model):
             ),
         ]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.user} -> {self.group}"
 
 
@@ -144,5 +172,5 @@ class AutoGroupRule(models.Model):
         verbose_name = "Правило автоподборки"
         verbose_name_plural = "Правила автоподборок"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'AutoRule[{self.group.name}] category="{self.category}"'

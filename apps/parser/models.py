@@ -1,3 +1,5 @@
+from typing import Any, Optional
+
 from django.db import models
 
 from apps.users.models import User
@@ -74,19 +76,25 @@ class TelegramChannel(models.Model):
         null=True,
         verbose_name="Язык канала",
     )
+    is_verified = models.BooleanField(
+        default=False, db_index=True, verbose_name="Прошел верификацию"
+    )
+    verified_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="Дата верификации"
+    )
 
     class Meta:
         verbose_name = "Telegram канал"
         verbose_name_plural = "Telegram каналы"
 
-    def last_stat(self):
+    def last_stat(self) -> Optional["ChannelStats"]:
         """Получение последней статистики канала"""
         return self.channelstats_set.order_by("-parsed_at").first()
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.channel_id} канал {self.title}"
 
-    def get_data(self):
+    def get_data(self) -> dict[str, Any]:
         """
         Метод возвращает представление данных канала в виде словаря,
         пригодного для передачи на фронтенд (Inertia.js).
@@ -98,13 +106,15 @@ class TelegramChannel(models.Model):
             "description": self.description,
             "participants_count": self.participants_count,
             "parsed_at": self.parsed_at,
-            "pinned_messages": self.pinned_messages or [],
+            "pinned_messages": self.pinned_messages,
             "creation_date": self.creation_date,
-            "last_messages": self.last_messages or [],
+            "last_messages": self.last_messages,
             "average_views": self.average_views,
             "category": self.category,
             "country": self.country,
             "language": self.language,
+            "is_verified": self.is_verified,
+            "verified_at": self.verified_at,
         }
 
 
@@ -146,7 +156,7 @@ class ChannelModerator(models.Model):
         unique_together = ["user", "channel"]
         db_table = "channel_moderators"
 
-    def __str__(self):
+    def __str__(self) -> str:
         role = "Владелец" if self.is_owner else "Модератор"
         return f"{self.user} - {role} канала {self.channel.title}"
 
@@ -172,7 +182,7 @@ class ChannelStats(models.Model):
         get_latest_by = "parsed_at"
         ordering = ["-parsed_at"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.channel} - {self.parsed_at}"
 
 
@@ -211,3 +221,236 @@ class AIInsight(models.Model):
         verbose_name = "AI инсайт"
         verbose_name_plural = "AI инсайты"
         ordering = ["-created_at"]
+
+
+class Post(models.Model):
+    """
+    Формат данных для пропсов поста:
+    {
+        "telegram_message_id": 12345,
+        "text": "Hello!",
+        "published_at": "2024-01-01T12:00:00Z",
+        "views": 1000,
+        "forwards": 50,
+        "comments_count": 20,
+        "reposts": 10,
+        "is_pinned": False,
+        "media_type": "photo",
+        "permalink": "https://t.me/channel/12345",
+        "reactions": [
+            {"emoji": "👍", "count": 42},
+            {"emoji": "❤️", "count": 15},
+        ],
+        "total_reactions": 57
+    }
+    """
+
+    MEDIA_TYPES = [
+        ("photo", "Photo"),
+        ("video", "Video"),
+        ("document", "Document"),
+        ("sticker", "Sticker"),
+        ("none", "No media"),
+    ]
+
+    channel = models.ForeignKey(
+        TelegramChannel,
+        on_delete=models.CASCADE,
+        related_name="posts",
+        verbose_name="Канал",
+    )
+
+    telegram_message_id = models.BigIntegerField(
+        verbose_name="ID Телеграм сообщения",
+    )
+
+    text = models.TextField(
+        verbose_name="Текст поста",
+    )
+
+    hashtags = models.JSONField(default=list, verbose_name="Хештеги")
+
+    published_at = models.DateTimeField(
+        db_index=True,
+        verbose_name="Время публикации поста",
+    )
+
+    views = models.PositiveIntegerField(
+        default=0,
+        db_index=True,
+        verbose_name="Количество просмотров",
+    )
+
+    forwards = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Количество пересылок",
+    )
+
+    comments_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Количество комментариев",
+    )
+
+    reposts = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Количество репостов",
+    )
+
+    is_pinned = models.BooleanField(
+        default=False,
+        verbose_name="Закреплённый пост",
+    )
+
+    media_type = models.CharField(
+        max_length=20,
+        choices=MEDIA_TYPES,
+        default="none",
+        verbose_name="Тип медиа",
+    )
+
+    permalink = models.URLField(
+        blank=True,
+        null=True,
+        verbose_name="Ссылка на пост",
+    )
+
+    fwd_from = models.BigIntegerField(
+        blank=True,
+        null=True,
+        verbose_name="ID канала-источника репоста",
+    )
+    mentions = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name="Упоминания каналов",
+    )
+
+    class Meta:
+        verbose_name = "Пост"
+        verbose_name_plural = "Посты"
+        unique_together = ("channel", "telegram_message_id")
+
+        indexes = [
+            models.Index(fields=["channel", "-published_at"]),
+            models.Index(fields=["views"]),
+        ]
+
+    def total_reactions(self) -> int:
+        """Метод для админки (одиночное число)."""
+        return self.reactions.aggregate(total=models.Sum("count"))["total"] or 0
+
+    def get_reactions_breakdown(self, limit: int | None = None) -> dict:
+        """
+        Метод для API/Сериализатора.
+        Возвращает объект, содержащий общую сумму и список (top-N)
+        """
+        total = self.total_reactions()
+
+        reactions_qs = self.reactions.values("emoji", "count").order_by(
+            "-count"
+        )
+
+        if limit is not None:
+            reactions_qs = reactions_qs[:limit]
+
+        details = []
+        for item in reactions_qs:
+            count = item["count"]
+            # Расчет процента с защитой от деления на ноль
+            percent = round((count / total * 100), 2) if total > 0 else 0.0
+            details.append(
+                {"emoji": item["emoji"], "count": count, "percent": percent}
+            )
+
+        return {
+            "total": total,
+            "details": details,
+        }
+
+    def calculate_er(self) -> float:
+        """
+        Вычисляет Engagement Rate относительно просмотров.
+        Формула: (reactions + comments + forwards) / views
+        """
+        total_interactions = (
+            self.total_reactions() + self.comments_count + self.forwards
+        )
+
+        if self.views <= 0:
+            return 0.0
+
+        return round(total_interactions / self.views, 4)
+
+    def __str__(self):
+        return f"Post #{self.telegram_message_id} in {self.channel}"
+
+
+class PostReaction(models.Model):
+    post = models.ForeignKey(
+        "Post",
+        on_delete=models.CASCADE,
+        related_name="reactions",
+        verbose_name="Пост",
+    )
+    emoji = models.CharField(
+        max_length=10,
+        verbose_name="Эмоджи",
+    )
+    count = models.PositiveIntegerField(
+        default=1,
+        verbose_name="Количество реакций",
+    )
+
+    class Meta:
+        verbose_name = "Реакция на пост"
+        verbose_name_plural = "Реакции на пост"
+        unique_together = ("post", "emoji")
+
+
+class PostAnalysis(models.Model):
+    """
+    НОВАЯ МОДЕЛЬ: Хранит AI-разбор поста
+    в соответствии с дизайном страницы (§4)
+    Соответствует трем колонкам: «Почему зашёл», «Что улучшить», «Похожие идеи»
+    """
+
+    post = models.OneToOneField(
+        "Post",
+        on_delete=models.CASCADE,
+        related_name="post_analysis",
+        verbose_name="Пост",
+    )
+
+    why_worked = models.TextField(
+        verbose_name="Почему зашёл",
+    )
+
+    how_to_improve = models.TextField(
+        verbose_name="Что улучшить",
+    )
+
+    similar_posts = models.ManyToManyField(
+        "Post",
+        related_name="similar_to",
+        blank=True,
+        verbose_name="Похожие идеи",
+    )  # type: ignore
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата генерации",
+    )
+
+    model_version = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name="Версия модели AI",
+    )
+
+    class Meta:
+        verbose_name = "AI анализ поста"
+        verbose_name_plural = "AI анализы постов"
+
+    def __str__(self):
+        return f"AI Analysis for Post #{self.post.telegram_message_id}"
