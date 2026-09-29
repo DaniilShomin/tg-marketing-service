@@ -157,3 +157,56 @@ class PartnerProfile(models.Model):
 
         # Вызываем родительский метод save для сохранения объекта
         super().save(*args, **kwargs)
+
+
+class DataSubjectRequestLog(models.Model):
+    """Audit log for requests made by a personal data subject."""
+
+    class RequestType(models.TextChoices):
+        EXPORT = "export", "Экспорт персональных данных"
+
+    class Status(models.TextChoices):
+        COMPLETED = "completed", "Выполнен"
+
+    subject = models.ForeignKey(
+        User,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="personal_data_request_logs",
+        verbose_name="Субъект персональных данных",
+    )
+    subject_id_snapshot = models.PositiveBigIntegerField(
+        verbose_name="ID субъекта на момент запроса"
+    )
+    request_type = models.CharField(
+        max_length=20,
+        choices=RequestType.choices,
+        default=RequestType.EXPORT,
+        verbose_name="Тип запроса",
+    )
+    http_method = models.CharField(max_length=4, verbose_name="HTTP-метод")
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.COMPLETED,
+        verbose_name="Статус",
+    )
+    requested_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата запроса",
+    )
+    completed_at = models.DateTimeField(
+        verbose_name="Дата выполнения",
+    )
+
+    class Meta:
+        db_table = "data_subject_request_logs"
+        ordering = ["-requested_at"]
+        verbose_name = "Запрос субъекта персональных данных"
+        verbose_name_plural = "Запросы субъектов персональных данных"
+
+    def __str__(self):
+        return (
+            f"{self.request_type} for subject {self.subject_id_snapshot} "
+            f"at {self.requested_at}"
+        )
