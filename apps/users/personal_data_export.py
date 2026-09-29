@@ -1,5 +1,8 @@
 """Build the versioned personal data export owned by one user."""
 
+from datetime import datetime
+from typing import Any
+
 from apps.group_channels.models import Group
 from apps.parser.models import AIInsight, ChannelModerator
 from apps.users.models import PartnerProfile, User
@@ -7,11 +10,11 @@ from apps.users.models import PartnerProfile, User
 EXPORT_FORMAT_VERSION = "1.0"
 
 
-def _isoformat(value):
+def _isoformat(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
-def _profile_data(user):
+def _profile_data(user: User) -> dict[str, Any]:
     return {
         "email": user.email,
         "first_name": user.first_name,
@@ -24,7 +27,7 @@ def _profile_data(user):
     }
 
 
-def _partner_data(user):
+def _partner_data(user: User) -> dict[str, Any] | None:
     try:
         profile = user.partner_profile
     except PartnerProfile.DoesNotExist:
@@ -39,7 +42,7 @@ def _partner_data(user):
     }
 
 
-def _owned_groups(user):
+def _owned_groups(user: User) -> list[dict[str, Any]]:
     groups = (
         Group.objects.filter(owner=user)
         .prefetch_related("channels")
@@ -61,7 +64,7 @@ def _owned_groups(user):
     ]
 
 
-def _moderator_assignments(user):
+def _moderator_assignments(user: User) -> list[dict[str, Any]]:
     assignments = ChannelModerator.objects.filter(user=user).order_by("pk")
     return [
         {
@@ -77,7 +80,7 @@ def _moderator_assignments(user):
     ]
 
 
-def _ai_insights(user):
+def _ai_insights(user: User) -> list[dict[str, Any]]:
     insights = AIInsight.objects.filter(user=user).order_by("pk")
     return [
         {
@@ -92,8 +95,10 @@ def _ai_insights(user):
     ]
 
 
-def _processing_information(has_partner_profile):
-    fields = {
+def _processing_information(
+    has_partner_profile: bool,
+) -> dict[str, Any]:
+    fields: dict[str, list[str]] = {
         "subject": ["subject_id"],
         "profile": [
             "email",
@@ -168,9 +173,12 @@ def _processing_information(has_partner_profile):
     }
 
 
-def build_personal_data_export(user: User, exported_at):
+def build_personal_data_export(
+    user: User,
+    exported_at: datetime,
+) -> dict[str, Any]:
     partner_data = _partner_data(user)
-    personal_data = {
+    personal_data: dict[str, Any] = {
         "profile": _profile_data(user),
         "owned_groups": _owned_groups(user),
         "channel_moderator_assignments": _moderator_assignments(user),

@@ -70,7 +70,7 @@ class PersonalDataExportView(UserAuthenticationCheckMixin, View):
             subject=user,
             subject_id_snapshot=user.pk,
             request_type=DataSubjectRequestLog.RequestType.EXPORT,
-            http_method=request.method,
+            http_method=cast(str, request.method),
             status=DataSubjectRequestLog.Status.COMPLETED,
             completed_at=exported_at,
         )

@@ -1,6 +1,8 @@
 import json
 from decimal import Decimal
+from typing import Any, Literal, cast
 
+from django.http import HttpResponse
 from django.test import TestCase
 from django.urls import reverse
 
@@ -10,7 +12,7 @@ from apps.users.models import DataSubjectRequestLog, PartnerProfile, User
 
 
 class PersonalDataExportTest(TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.user = User.objects.create_user(
             username="owner",
             email="owner@example.com",
@@ -70,12 +72,16 @@ class PersonalDataExportTest(TestCase):
         )
         self.url = reverse("users:personal_data_export")
 
-    def _download(self, method="get"):
+    def _download(
+        self,
+        method: Literal["get", "post"] = "get",
+    ) -> tuple[HttpResponse, dict[str, Any]]:
         self.client.force_login(self.user)
-        response = getattr(self.client, method)(self.url)
+        request = self.client.get if method == "get" else self.client.post
+        response = cast(HttpResponse, request(self.url))
         return response, json.loads(response.content)
 
-    def test_owner_downloads_only_own_personal_data(self):
+    def test_owner_downloads_only_own_personal_data(self) -> None:
         response, payload = self._download()
 
         self.assertEqual(response.status_code, 200)
@@ -120,7 +126,7 @@ class PersonalDataExportTest(TestCase):
         self.assertTrue(processing["retention_terms"])
         self.assertIn("personal_data_fields", processing)
 
-    def test_partner_receives_own_payment_details_and_balance(self):
+    def test_partner_receives_own_payment_details_and_balance(self) -> None:
         PartnerProfile.objects.create(
             user=self.user,
             status="active",
@@ -137,13 +143,13 @@ class PersonalDataExportTest(TestCase):
             partner["payment_details"], "Счёт 40702810000000000001"
         )
 
-    def test_export_is_available_only_to_authenticated_subject(self):
+    def test_export_is_available_only_to_authenticated_subject(self) -> None:
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(DataSubjectRequestLog.objects.count(), 0)
 
-    def test_successful_export_is_written_to_subject_request_log(self):
+    def test_successful_export_is_written_to_subject_request_log(self) -> None:
         self._download(method="post")
 
         log = DataSubjectRequestLog.objects.get()
