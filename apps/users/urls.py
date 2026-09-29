@@ -4,6 +4,7 @@ from apps.users.views import (
     AvatarChangeView,
     LoginView,
     LogoutView,
+    PersonalDataExportView,
     RestorePasswordRequestView,
     RestorePasswordView,
     UserCabinetView,
@@ -18,6 +19,11 @@ urlpatterns = [
     path("logout/", LogoutView.as_view(), name="logout"),
     path("login/", LoginView.as_view(), name="login"),
     path("me/", UserProfileView.as_view(), name="profile"),
+    path(
+        "me/personal-data/export/",
+        PersonalDataExportView.as_view(),
+        name="personal_data_export",
+    ),
     path("profile/", UserCabinetView.as_view(), name="user_cabinet"),
     path("create/", UserRegister.as_view(), name="user_create"),
     path(

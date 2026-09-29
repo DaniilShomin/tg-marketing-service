@@ -1,7 +1,10 @@
+import json
+
 from django.contrib import auth, messages
 from django.contrib.auth import login
 from django.contrib.auth.tokens import default_token_generator
 from django.db.models import Count
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.templatetags.static import static
 from django.urls import reverse
@@ -18,11 +21,49 @@ from apps.users.forms import (
     UserRegForm,
     UserUpdateForm,
 )
-from apps.users.models import User
+from apps.users.models import DataSubjectRequestLog, User
+from apps.users.personal_data_export import build_personal_data_export
 from config.mixins import UserAuthenticationCheckMixin
 
 # константа с дефолтной=аватаркой для представления UserRegister
 DEFAULT_AVATAR_URL = static("users/default-avatar.svg")
+
+
+class PersonalDataExportView(UserAuthenticationCheckMixin, View):
+    """Download personal data belonging to the authenticated subject."""
+
+    def get(self, request, *args, **kwargs):
+        return self._export(request)
+
+    def post(self, request, *args, **kwargs):
+        return self._export(request)
+
+    def _export(self, request):
+        exported_at = timezone.now()
+        payload = build_personal_data_export(request.user, exported_at)
+        content = json.dumps(payload, ensure_ascii=False, indent=2)
+
+        DataSubjectRequestLog.objects.create(
+            subject=request.user,
+            subject_id_snapshot=request.user.pk,
+            request_type=DataSubjectRequestLog.RequestType.EXPORT,
+            http_method=request.method,
+            status=DataSubjectRequestLog.Status.COMPLETED,
+            completed_at=exported_at,
+        )
+
+        filename = (
+            f"personal-data-{request.user.pk}-{exported_at:%Y-%m-%d}.json"
+        )
+        response = HttpResponse(
+            content,
+            content_type="application/json; charset=utf-8",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Cache-Control"] = "no-store"
+        response["Pragma"] = "no-cache"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 class LogoutView(UserAuthenticationCheckMixin, View):
