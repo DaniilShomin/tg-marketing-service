@@ -27,13 +27,32 @@ import { mockPosts } from "@/shared/mocks/posts";
 import deltaFormatter from "@/utils/deltaFormatter";
 import getErBadgeColor from "@/utils/getErBadgeColor";
 
+/**
+ * Пропсы для страницы панели управления (дашборда).
+ * Объединяет в себе данные канала (ChannelData) и список публикаций (PostProps).
+ */
+
 interface DashBoardProps extends ChannelData, PostProps {}
 
 const channel = channelsCol[0];
 
+/**
+ * Главная страница дашборда аналитики канала.
+ * 
+ * Отображает:
+ * - Шапку канала с аватаром, названием, юзернеймом и кнопками управления.
+ * - Сетку карточек ключевых показателей (KPI) с абсолютными и процентными дельтами.
+ * - График динамики роста аудитории (AreaChart).
+ * - Блок AI-советов и рекомендаций (InsightCard).
+ * - Интерактивную таблицу последних публикаций со статистикой просмотров, реакций и ER.
+ */
+
 const DashboardPage: React.FC<DashBoardProps> = ({
+ /** Список ключевых показателей эффективности (KPI) канала */
  kpis = mockKpis,
+ /** Данные для построения графика роста подписчиков */
  growthData = mockGrowthData,
+  /** Список последних постов для отображения в таблице */
  posts = mockPosts,
 }) => {
  const navigate = useNavigate();

@@ -23,8 +23,20 @@ import { useNavigate } from "react-router-dom";
 import { mockReactions, MOCK_ANALYSIS_DATA } from "@/shared/mocks/posts";
 import type { PostPageProps, PostAnalysis } from "@/types/post";
 
-// TODO: Pages должны быть максимально простыми и которкими, 
+// TODO: Pages должны быть максимально простыми и которкими,
 // Компоненты, из которых состоит страница, необходимо вынести в отдельные файлы.
+
+/**
+ * Страница детального просмотра публикации.
+ *
+ * Отображает:
+ * - Текст поста и хэштеги.
+ * - Интерактивную детализацию реакций с прогресс-барами и подсчётом уровня вовлеченности (ER).
+ * - Секцию AI-аналитики, которая может находиться в одном из 3-х состояний:
+ *   1. Не проведена (кнопка запуска анализа).
+ *   2. В процессе генерации (скелетоны и лоадер).
+ *   3. Завершена (вывод карточек инсайтов "Почему зашел", "Что улучшить" и "Похожие идеи").
+ */
 
 const PostPage: React.FC<PostPageProps> = ({
  reactions = mockReactions,
@@ -34,7 +46,12 @@ const PostPage: React.FC<PostPageProps> = ({
 
  const [analysis, setAnalysis] = useState<PostAnalysis | null>(null);
 
-//  TODO: когда моковые данные заменятся на данные с бекенда, нужно будет добавить обработку ошибок
+ /**
+  * Имитирует запуск AI-анализа публикации с задержкой в 3 секунды.
+  * Сначала переводит статус в "processing", а затем в "completed".
+  */
+
+ //  TODO: когда моковые данные заменятся на данные с бекенда, нужно будет добавить обработку ошибок
 
  const handleStartAnalysis = () => {
   const baseData = propAnalysis || MOCK_ANALYSIS_DATA;
@@ -132,6 +149,7 @@ const PostPage: React.FC<PostPageProps> = ({
     <Title order={3}>AI-разбор поста</Title>
    </Group>
 
+  {/* 1. СОСТОЯНИЕ: Анализ не запущен */}
    {!analysis && (
     <Paper withBorder p="xl" radius="md" ta="center">
      <IconBrain
@@ -147,7 +165,8 @@ const PostPage: React.FC<PostPageProps> = ({
      </Button>
     </Paper>
    )}
-
+  
+ {/* 2. СОСТОЯНИЕ: Процесс генерации */}
    {analysis?.status === "processing" && (
     <Stack>
      <Alert
@@ -163,6 +182,7 @@ const PostPage: React.FC<PostPageProps> = ({
     </Stack>
    )}
 
+   {/* 3. СОСТОЯНИЕ: Разбор успешно завершен */}
    {analysis?.status === "completed" && (
     <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
      <InsightCard color="green" label="Почему зашёл">
