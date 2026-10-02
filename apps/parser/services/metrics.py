@@ -91,7 +91,6 @@ def update_channels_citation_indices():
     for channel in channels:
         r_count = repost_map.get(channel.channel_id, 0)
 
-        # Проверяем упоминание по ID и по Username (без @)
         m_count = mention_map.get(channel.channel_id, 0)
         if channel.username:
             m_count += mention_map.get(channel.username.lstrip("@"), 0)
