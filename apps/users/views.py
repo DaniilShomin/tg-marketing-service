@@ -1,3 +1,4 @@
+import json
 from typing import Any, cast
 
 from django.contrib import auth, messages
@@ -5,6 +6,7 @@ from django.contrib.auth import login, update_session_auth_hash
 from django.contrib.auth.tokens import default_token_generator
 from django.http import (
     HttpRequest,
+    HttpResponse,
     HttpResponseRedirect,
 )
 from django.shortcuts import redirect
@@ -31,11 +33,58 @@ from apps.users.forms import (
     UserUpdateForm,
 )
 from apps.users.middleware import RoleRequest
-from apps.users.models import User
+from apps.users.models import DataSubjectRequestLog, User
+from apps.users.personal_data_export import build_personal_data_export
 from config.mixins import UserAuthenticationCheckMixin
 
 # константа с дефолтной=аватаркой для представления UserRegister
 DEFAULT_AVATAR_URL = static("users/default-avatar.svg")
+
+
+class PersonalDataExportView(UserAuthenticationCheckMixin, View):
+    """Download personal data belonging to the authenticated subject."""
+
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponse:
+        return self._export(request)
+
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponse:
+        return self._export(request)
+
+    def _export(self, request: HttpRequest) -> HttpResponse:
+        user = cast(User, request.user)
+        exported_at = timezone.now()
+        payload = build_personal_data_export(user, exported_at)
+        content = json.dumps(payload, ensure_ascii=False, indent=2)
+
+        DataSubjectRequestLog.objects.create(
+            subject=user,
+            subject_id_snapshot=user.pk,
+            request_type=DataSubjectRequestLog.RequestType.EXPORT,
+            http_method=cast(str, request.method),
+            status=DataSubjectRequestLog.Status.COMPLETED,
+            completed_at=exported_at,
+        )
+
+        filename = f"personal-data-{user.pk}-{exported_at:%Y-%m-%d}.json"
+        response = HttpResponse(
+            content,
+            content_type="application/json; charset=utf-8",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Cache-Control"] = "no-store"
+        response["Pragma"] = "no-cache"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 class LogoutView(UserAuthenticationCheckMixin, View):
