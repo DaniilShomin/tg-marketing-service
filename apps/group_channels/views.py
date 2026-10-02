@@ -15,6 +15,9 @@ from apps.group_channels.forms import (
 from apps.group_channels.models import Group
 from apps.parser.models import TelegramChannel
 from config.mixins import UserAuthenticationCheckMixin
+from apps.group_channels.services.collections_catalog_service import (
+    CollectionsCatalogService,
+)
 
 # константа для дефолтной аватарки
 DEFAULT_AVATAR_GROUP = f"{settings.STATIC_URL}default_avatar_group.jpg"
@@ -191,4 +194,22 @@ class AddChannelsView(UserAuthenticationCheckMixin, UserPassesTestMixin, View):
             request,
             "GroupDetail",
             props={"form": {"errors": form.errors, "values": form.data}},
+        )
+
+
+class CollectionsCatalogView(View):
+    """Публичный каталог подборок."""
+
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponse:
+        dto = CollectionsCatalogService().build()
+
+        return inertia_render(
+            request,
+            "Collections",
+            props=dto.model_dump(mode="json"),
         )
