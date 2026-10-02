@@ -1,7 +1,16 @@
 from datetime import timedelta
 from typing import Any
 
-from django.db.models import Avg, Count, F, OuterRef, QuerySet, Subquery
+from django.db.models import (
+    Avg,
+    Count,
+    F,
+    IntegerField,
+    OuterRef,
+    QuerySet,
+    Subquery,
+    Sum,
+)
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -14,7 +23,12 @@ from apps.homepage.dto.dashboard_dto import (
     InsightDTO,
     StatsDTO,
 )
-from apps.parser.models import AIInsight, ChannelStats, TelegramChannel
+from apps.parser.models import (
+    AIInsight,
+    ChannelStats,
+    PostReaction,
+    TelegramChannel,
+)
 from apps.parser.services.metrics import engagement_rate, growth_30d
 from apps.users.models import User
 
@@ -46,6 +60,15 @@ class DashboardService:
     # ------------------------
 
     def _get_channels_queryset(self) -> QuerySet[TelegramChannel]:
+        # cуммирует все count из PostReaction для каждого поста
+        reactions_sum_subquery = (
+            PostReaction.objects.filter(post=OuterRef("pk"))
+            .values("post")
+            .annotate(total=Sum("count"))
+            .values("total")
+        )
+
+        # Подзапрос для статистики роста
         latest_stats = ChannelStats.objects.filter(
             channel=OuterRef("pk")
         ).order_by("-parsed_at")
@@ -57,11 +80,15 @@ class DashboardService:
                 latest_growth=Subquery(latest_stats.values("daily_growth")[:1]),
                 posts_count=Count("posts", distinct=True),
                 avg_views=Avg("posts__views"),
-                # Среднее количество взаимодействий
                 avg_interactions=Avg(
                     F("posts__comments_count")
                     + F("posts__forwards")
-                    + Coalesce(F("posts__reactions__count"), 0)
+                    + Coalesce(
+                        Subquery(
+                            reactions_sum_subquery, output_field=IntegerField()
+                        ),
+                        0,
+                    )
                 ),
             )
         )
