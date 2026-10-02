@@ -3,7 +3,7 @@ from django.http import HttpRequest
 from guardian.admin import GuardedModelAdmin
 
 from apps.parser.models import ChannelModerator
-from apps.users.models import PartnerProfile, User
+from apps.users.models import DataSubjectRequestLog, PartnerProfile, User
 
 
 class ChannelModeratorInline(admin.TabularInline):
@@ -157,3 +157,43 @@ class PartnerProfileAdmin(GuardedModelAdmin):
 
     def get_queryset(self, request: HttpRequest):
         return super().get_queryset(request).select_related("user")  # type: ignore[no-untyped-call]
+
+
+@admin.register(DataSubjectRequestLog)
+class DataSubjectRequestLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "subject_id_snapshot",
+        "request_type",
+        "http_method",
+        "status",
+        "requested_at",
+        "completed_at",
+    )
+    list_filter = ("request_type", "http_method", "status")
+    search_fields = ("subject_id_snapshot", "subject__email")
+    readonly_fields = (
+        "subject",
+        "subject_id_snapshot",
+        "request_type",
+        "http_method",
+        "status",
+        "requested_at",
+        "completed_at",
+    )
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(
+        self,
+        request: HttpRequest,
+        obj: DataSubjectRequestLog | None = None,
+    ) -> bool:
+        return False
+
+    def has_delete_permission(
+        self,
+        request: HttpRequest,
+        obj: DataSubjectRequestLog | None = None,
+    ) -> bool:
+        return False
