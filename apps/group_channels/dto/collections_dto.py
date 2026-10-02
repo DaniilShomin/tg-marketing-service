@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class CollectionDTO(BaseModel):
     """Данные одной подборки публичного каталога."""
+
     id: int
     name: str
     slug: str
@@ -16,5 +17,6 @@ class CollectionDTO(BaseModel):
 
 class CollectionsCatalogDTO(BaseModel):
     """Данные публичного каталога подборок."""
+
     featured: list[CollectionDTO]
     collections: list[CollectionDTO]

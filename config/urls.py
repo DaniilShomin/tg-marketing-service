@@ -28,7 +28,7 @@ urlpatterns = [
         "collections/",
         CollectionsCatalogView.as_view(),
         name="collections_catalog",
-        ),
+    ),
     path("dashboard/", include("apps.homepage.urls")),
     path("auth/", include("apps.users.urls")),
     path("group/", include("apps.group_channels.urls")),
