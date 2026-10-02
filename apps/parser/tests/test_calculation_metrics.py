@@ -21,11 +21,11 @@ def test_average_reach():
 def test_growth_30d():
     # Обычный рост
     assert growth_30d(150, 100) == (50, 50.0)
+
     # Падение
     assert growth_30d(80, 100) == (-20, -20.0)
-    # Нулевой старт (защита от ZeroDivision)
-    assert growth_30d(100, 0) == (100, 0.0)
-    # Нет данных в прошлом (None)
-    assert growth_30d(100, None) == (100, 0.0)
+
     # Стагнация
     assert growth_30d(100, 100) == (0, 0.0)
+    assert growth_30d(100, 0) == (0, 0.0)
+    assert growth_30d(100, None) == (0, 0.0)
