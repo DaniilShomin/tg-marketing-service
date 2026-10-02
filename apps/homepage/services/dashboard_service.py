@@ -60,7 +60,7 @@ class DashboardService:
     # ------------------------
 
     def _get_channels_queryset(self) -> QuerySet[TelegramChannel]:
-        # cуммирует все count из PostReaction для каждого поста
+        # cуммирует count из PostReaction для каждого поста
         reactions_sum_subquery = (
             PostReaction.objects.filter(post=OuterRef("pk"))
             .values("post")
