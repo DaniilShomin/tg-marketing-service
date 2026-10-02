@@ -1,6 +1,9 @@
 from django.db.models import Count
 
-from apps.group_channels.dto.collections_dto import CollectionDTO, CollectionsCatalogDTO
+from apps.group_channels.dto.collections_dto import (
+    CollectionDTO,
+    CollectionsCatalogDTO,
+)
 from apps.group_channels.models import Group
 from apps.parser.models import TelegramChannel
 
@@ -21,26 +24,20 @@ class CollectionsCatalogService:
 
         self._annotate_channel_counts(groups)
 
-        # Featured сортируем до преобразования в DTO,
-        # пока доступно внутреннее поле order.
+        # Редакторские подборки имеют приоритет(?).
+        # Затем сортировка по order и id.
         featured_groups = sorted(
             groups,
             key=lambda group: (
-                group.order,
                 not group.is_editorial,
+                group.order,
                 group.id,
             ),
         )[:3]
 
-        collections = [
-            self._build_collection(group)
-            for group in groups
-        ]
+        collections = [self._build_collection(group) for group in groups]
 
-        featured = [
-            self._build_collection(group)
-            for group in featured_groups
-        ]
+        featured = [self._build_collection(group) for group in featured_groups]
 
         return CollectionsCatalogDTO(
             featured=featured,
@@ -70,27 +67,33 @@ class CollectionsCatalogService:
         category_counts: dict[str, int] = {}
 
         if categories:
-            category_counts = {
-                row["category"]: row["total"]
-                for row in (
-                    TelegramChannel.objects
-                    .filter(category__in=categories)
-                    .values("category")
-                    .annotate(total=Count("pk"))
-                )
-            }
+            for row in (
+                TelegramChannel.objects.filter(category__in=categories)
+                .values("category")
+                .annotate(total=Count("pk"))
+            ):
+                category = row["category"]
+
+                if category is not None:
+                    category_counts[category] = row["total"]
 
         for group in groups:
             if hasattr(group, "auto_rule"):
-                group.annotated_channel_count = category_counts.get(
-                    group.auto_rule.category,
-                    0,
+                setattr(
+                    group,
+                    "annotated_channel_count",
+                    category_counts.get(
+                        group.auto_rule.category,
+                        0,
+                    ),
                 )
             else:
-                # channels уже загружены через prefetch_related()
+                # channels уже загружены через prefetch_related(),
                 # поэтому отдельный запрос для каждой группы не выполняется.
-                group.annotated_channel_count = len(
-                    group.channels.all()
+                setattr(
+                    group,
+                    "annotated_channel_count",
+                    len(group.channels.all()),
                 )
 
     @staticmethod
@@ -99,7 +102,7 @@ class CollectionsCatalogService:
 
         data = group.get_data()
 
-        # Градиент должен быть стабильным:
+        # Ключ должен быть стабильным:
         # одна и та же подборка всегда получает один и тот же ключ.
         data["gradient_key"] = f"collection-{group.pk}"
 

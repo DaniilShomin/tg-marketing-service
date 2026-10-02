@@ -13,11 +13,11 @@ from apps.group_channels.forms import (
     UpdateGroupForm,
 )
 from apps.group_channels.models import Group
-from apps.parser.models import TelegramChannel
-from config.mixins import UserAuthenticationCheckMixin
 from apps.group_channels.services.collections_catalog_service import (
     CollectionsCatalogService,
 )
+from apps.parser.models import TelegramChannel
+from config.mixins import UserAuthenticationCheckMixin
 
 # константа для дефолтной аватарки
 DEFAULT_AVATAR_GROUP = f"{settings.STATIC_URL}default_avatar_group.jpg"

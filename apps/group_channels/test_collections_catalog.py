@@ -1,4 +1,3 @@
-
 from django.test import TestCase
 
 from apps.group_channels.models import AutoGroupRule, Group
@@ -61,7 +60,8 @@ class CollectionsCatalogServiceTest(TestCase):
         )
 
     def test_channel_count(self):
-        """Проверяет корректный подсчёт каналов для обычной и автоматической подборок."""
+        """Проверяет корректный подсчёт каналов
+        для обычной и автоматической подборок."""
 
         # Создаём обычную подборку с каналами через M2M-связь.
         regular_group = Group.objects.create(
@@ -119,8 +119,7 @@ class CollectionsCatalogServiceTest(TestCase):
             result = self.service.build()
 
         collections = {
-            collection.id: collection
-            for collection in result.collections
+            collection.id: collection for collection in result.collections
         }
 
         self.assertEqual(
@@ -133,30 +132,43 @@ class CollectionsCatalogServiceTest(TestCase):
         )
 
     def test_featured(self):
-        """Проверяет выбор первых трёх подборок по order, is_editorial и id."""
-        first = Group.objects.create(
-            name="Первая",
+        """Проверяет сортировку и приоритет редакторских
+        подборок."""
+        Group.objects.create(
+            name="Обычная первая",
             owner=self.user,
             order=1,
             is_editorial=False,
         )
-        second = Group.objects.create(
-            name="Вторая",
-            owner=self.user,
-            order=1,
-            is_editorial=True,
-        )
-        third = Group.objects.create(
-            name="Третья",
+        Group.objects.create(
+            name="Обычная вторая",
             owner=self.user,
             order=2,
             is_editorial=False,
         )
-        Group.objects.create(
-            name="Четвёртая",
+        editorial_first = Group.objects.create(
+            name="Редакторская первая",
+            owner=self.user,
+            order=2,
+            is_editorial=True,
+        )
+        editorial_second = Group.objects.create(
+            name="Редакторская вторая",
+            owner=self.user,
+            order=1,
+            is_editorial=True,
+        )
+        editorial_third = Group.objects.create(
+            name="Редакторская третья",
             owner=self.user,
             order=3,
             is_editorial=True,
+        )
+        Group.objects.create(
+            name="Обычная третья",
+            owner=self.user,
+            order=3,
+            is_editorial=False,
         )
 
         result = self.service.build()
@@ -164,11 +176,16 @@ class CollectionsCatalogServiceTest(TestCase):
         self.assertEqual(len(result.featured), 3)
         self.assertEqual(
             [item.id for item in result.featured],
-            [second.id, first.id, third.id],
+            [
+                editorial_second.id,
+                editorial_first.id,
+                editorial_third.id,
+            ],
         )
 
     def test_collections(self):
-        """Проверяет сортировку полного списка подборок по order, name и id."""
+        """Проверяет сортировку полного списка подборок
+        по order, name и id."""
         first = Group.objects.create(
             name="А",
             owner=self.user,
@@ -191,5 +208,3 @@ class CollectionsCatalogServiceTest(TestCase):
             [item.id for item in result.collections],
             [first.id, second.id, third.id],
         )
-
-
