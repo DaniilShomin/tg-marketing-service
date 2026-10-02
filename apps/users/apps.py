@@ -18,7 +18,7 @@ class UsersConfig(AppConfig):
     def ready(self):
         @receiver(social_account_added)
         def handle_yandex_login(
-            sender: None,
+            sender: type[SocialLogin],
             request: HttpRequest,
             sociallogin: SocialLogin,
             **kwargs,
