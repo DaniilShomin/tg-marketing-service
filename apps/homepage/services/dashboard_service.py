@@ -26,6 +26,7 @@ from apps.homepage.dto.dashboard_dto import (
 from apps.parser.models import (
     AIInsight,
     ChannelStats,
+    Post,
     PostReaction,
     TelegramChannel,
 )
@@ -58,9 +59,14 @@ class DashboardService:
     # ------------------------
     # QuerySet
     # ------------------------
-
     def _get_channels_queryset(self) -> QuerySet[TelegramChannel]:
-        # cуммирует все count из PostReaction для каждого поста
+        """
+        Иерархия OuterRef:
+        1. reactions_sum_subquery ссылается на Post
+        2. avg_interactions_subquery ссылается на TelegramChannel
+        """
+
+        # подзапрос суммы реакций конкретного поста
         reactions_sum_subquery = (
             PostReaction.objects.filter(post=OuterRef("pk"))
             .values("post")
@@ -68,7 +74,25 @@ class DashboardService:
             .values("total")
         )
 
-        # Подзапрос для статистики роста
+        # подзапрос среднего взаимодействия по всем постам конкретного канала
+        avg_interactions_subquery = (
+            Post.objects.filter(channel=OuterRef("pk"))
+            .annotate(
+                tr_count=Coalesce(
+                    Subquery(
+                        reactions_sum_subquery, output_field=IntegerField()
+                    ),
+                    0,
+                )
+            )
+            .values("channel")
+            .annotate(
+                avg_int=Avg(F("comments_count") + F("forwards") + F("tr_count"))
+            )
+            .values("avg_int")
+        )
+
+        # Подзапрос для получения последнего значения роста
         latest_stats = ChannelStats.objects.filter(
             channel=OuterRef("pk")
         ).order_by("-parsed_at")
@@ -80,15 +104,8 @@ class DashboardService:
                 latest_growth=Subquery(latest_stats.values("daily_growth")[:1]),
                 posts_count=Count("posts", distinct=True),
                 avg_views=Avg("posts__views"),
-                avg_interactions=Avg(
-                    F("posts__comments_count")
-                    + F("posts__forwards")
-                    + Coalesce(
-                        Subquery(
-                            reactions_sum_subquery, output_field=IntegerField()
-                        ),
-                        0,
-                    )
+                avg_interactions=Subquery(
+                    avg_interactions_subquery, output_field=IntegerField()
                 ),
             )
         )

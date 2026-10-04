@@ -76,9 +76,6 @@ class TelegramChannel(models.Model):
         null=True,
         verbose_name="Язык канала",
     )
-    citation_index = models.FloatField(
-        default=0.0, db_index=True, verbose_name="Индекс цитируемости"
-    )
     is_verified = models.BooleanField(
         default=False, db_index=True, verbose_name="Прошел верификацию"
     )
@@ -118,7 +115,6 @@ class TelegramChannel(models.Model):
             "language": self.language,
             "is_verified": self.is_verified,
             "verified_at": self.verified_at,
-            "citation_index": self.citation_index,
         }
 
 
