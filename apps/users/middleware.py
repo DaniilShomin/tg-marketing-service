@@ -5,7 +5,7 @@ from typing import cast
 from django.contrib.auth import get_user_model
 from django.http import HttpRequest, HttpResponse
 
-from apps.users.roles import Role
+from apps.users.consents import request_has_consent, stash_yandex_oauth_consent
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -23,21 +23,16 @@ class RoleMiddleware:
         self.get_response = get_response
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
-        # Получаем роль пользователя, если она известна
-        user_role = getattr(request.user, "role", None)
-        role_obj = Role._default_manager.filter(code=user_role).first()
-
-        # Если роль пользователя не найдена, ставим гостевую роль
-        if role_obj:
-            final_role = role_obj.code
-        elif user_role:
-            final_role = user_role
-        else:
-            final_role = "guest"
-
-        # Ставим роль в запрос
+        """
+        Получаем роль пользователя, если она известна
+        Если роль пользователя не найдена, ставим гостевую роль
+        """
         role_request = cast(RoleRequest, request)
-        role_request.role = final_role
+
+        if request.user.is_authenticated:
+            role_request.role = request.user.role or "guest"
+        else:
+            role_request.role = "guest"
 
         # logging-сообщение
         logger.debug(
@@ -47,3 +42,18 @@ class RoleMiddleware:
         response = self.get_response(request)
 
         return response
+
+
+class YandexOAuthConsentMiddleware:
+    def __init__(
+        self,
+        get_response: Callable[[HttpRequest], HttpResponse],
+    ) -> None:
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        if request.path.endswith(
+            "/accounts/yandex/login/"
+        ) and request_has_consent(request):
+            stash_yandex_oauth_consent(request)
+        return self.get_response(request)

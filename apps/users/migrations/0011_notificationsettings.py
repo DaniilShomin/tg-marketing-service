@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("users", "0007_role_alter_user_role_userrolehistory"),
+        ("users", "0010_subject_request_workflow"),
     ]
 
     operations = [

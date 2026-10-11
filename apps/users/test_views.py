@@ -1,3 +1,5 @@
+from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
 
@@ -5,8 +7,11 @@ from django.contrib.auth import get_user
 from django.http import JsonResponse
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
-from apps.users.models import NotificationSettings, User
+from apps.billing.models import Plan, Subscription
+from apps.users.consents import get_current_document_version
+from apps.users.models import Consent, NotificationSettings, User
 from apps.users.views import DEFAULT_AVATAR_URL
 
 
@@ -27,6 +32,7 @@ class UserRegisterTest(TestCase):
             "password2": "StrongPass12345!",
             "bio": "",
             "avatar_image": "",
+            "terms": "on",
         }
         payload.update(overrides)
         return payload
@@ -37,6 +43,9 @@ class UserRegisterTest(TestCase):
         response = self.client.post(
             reverse("users:user_create"),
             data=self.valid_payload(),
+            REMOTE_ADDR="203.0.113.42",
+            HTTP_X_FORWARDED_FOR="198.51.100.99",
+            HTTP_USER_AGENT="RegistrationTest/1.0",
         )
 
         self.assertRedirects(
@@ -50,6 +59,39 @@ class UserRegisterTest(TestCase):
         self.assertEqual(user.avatar_image, DEFAULT_AVATAR_URL)
         self.assertTrue(user.username.startswith("ada_"))
         self.assertEqual(get_user(self.client).pk, user.pk)
+
+        consent = Consent.objects.get(user=user)
+        self.assertEqual(
+            consent.document_type,
+            Consent.DocumentType.PERSONAL_DATA,
+        )
+        self.assertEqual(
+            consent.version,
+            get_current_document_version(Consent.DocumentType.PERSONAL_DATA),
+        )
+        self.assertEqual(consent.source, Consent.Source.EMAIL_REGISTRATION)
+        self.assertEqual(consent.ip, "203.0.113.42")
+        self.assertEqual(consent.user_agent, "RegistrationTest/1.0")
+
+    @patch("apps.users.views.inertia_render", side_effect=inertia_json_response)
+    def test_registration_without_consent_does_not_create_user(
+        self, _render: Any
+    ) -> None:
+        payload = self.valid_payload()
+        payload.pop("terms")
+
+        response = self.client.post(
+            reverse("users:user_create"),
+            data=payload,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(email="ada@example.com").exists())
+        self.assertEqual(Consent.objects.count(), 0)
+        self.assertIn(
+            "terms",
+            response.json()["props"]["form"]["errors"],
+        )
 
     @patch("apps.users.views.inertia_render", side_effect=inertia_json_response)
     def test_registration_errors_are_returned_as_field_errors(
@@ -123,7 +165,24 @@ class UserCabinetViewTest(TestCase):
         )
         self.assertEqual(user["role"], "user")
         self.assertEqual(user["bio"], "Old bio")
-        self.assertIsNone(data["props"]["subscription"])
+        subscription = data["props"]["subscription"]
+        free_plan = Plan.objects.get(code=Plan.Code.FREE)
+        self.assertEqual(subscription["plan"], Plan.Code.FREE)
+        self.assertEqual(
+            subscription["period"], Subscription.BillingPeriod.MONTHLY
+        )
+        self.assertEqual(
+            Decimal(subscription["price"]), free_plan.monthly_price
+        )
+        self.assertIsNone(subscription["current_period_end"])
+        self.assertEqual(
+            subscription["limits"],
+            {
+                "channels": free_plan.channels_limit,
+                "ai_requests": free_plan.ai_requests_limit,
+            },
+        )
+        self.assertEqual(subscription["days_left"], 0)
         self.assertEqual(
             data["props"]["notifications"],
             {
@@ -131,6 +190,38 @@ class UserCabinetViewTest(TestCase):
                 "trend_notifications": True,
                 "limit_exceeded": False,
                 "new_features": True,
+            },
+        )
+
+    @patch("apps.users.views.inertia_render", side_effect=inertia_json_response)
+    def test_get_returns_real_pro_subscription_state(
+        self, _render: Any
+    ) -> None:
+        pro_plan = Plan.objects.get(code=Plan.Code.PRO)
+        subscription = Subscription.objects.get(user=self.user)
+        subscription.plan = pro_plan
+        subscription.billing_period = Subscription.BillingPeriod.ANNUAL
+        subscription.current_period_end = timezone.now() + timedelta(days=5)
+        subscription.save()
+
+        response = self.client.get(reverse("users:user_cabinet"))
+
+        self.assertEqual(response.status_code, 200)
+
+        subscription_data = response.json()["props"]["subscription"]
+        self.assertEqual(subscription_data["plan"], Plan.Code.PRO)
+        self.assertEqual(
+            subscription_data["period"], Subscription.BillingPeriod.ANNUAL
+        )
+        self.assertEqual(
+            Decimal(subscription_data["price"]), pro_plan.annual_price
+        )
+        self.assertEqual(subscription_data["days_left"], 5)
+        self.assertEqual(
+            subscription_data["limits"],
+            {
+                "channels": pro_plan.channels_limit,
+                "ai_requests": pro_plan.ai_requests_limit,
             },
         )
 
@@ -276,3 +367,162 @@ class UserCabinetViewTest(TestCase):
         self.assertTrue(settings.weekly_reports)
         self.assertTrue(settings.trend_notifications)
         self.assertTrue(settings.new_features)
+
+
+class UserUpdateSecurityTest(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(
+            username="owner",
+            email="owner@example.com",
+            password="OldPass12345!",
+            role="user",
+            first_name="Owner",
+        )
+        self.other_user = User.objects.create_user(
+            username="other",
+            email="other@example.com",
+            password="OtherPass12345!",
+            role="user",
+            first_name="Other",
+        )
+
+    def profile_payload(self, **overrides: str) -> dict[str, str]:
+        payload = {
+            "first_name": "Updated",
+            "last_name": "User",
+            "email": "updated@example.com",
+            "bio": "Updated bio",
+            "avatar_image": "https://example.com/avatar.jpg",
+            "password1": "NewPass12345!",
+            "password2": "NewPass12345!",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_user_can_update_own_profile_and_password_without_logout(
+        self,
+    ) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse(
+                "users:user_update",
+                kwargs={"username": self.user.username},
+            ),
+            data=self.profile_payload(),
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Updated")
+        self.assertTrue(self.user.check_password("NewPass12345!"))
+        self.assertEqual(get_user(self.client).pk, self.user.pk)
+
+    def test_user_cannot_update_someone_elses_profile(self) -> None:
+        self.client.force_login(self.user)
+        original_email = self.other_user.email
+        original_password = self.other_user.password
+
+        response = self.client.post(
+            reverse(
+                "users:user_update",
+                kwargs={"username": self.other_user.username},
+            ),
+            data=self.profile_payload(email="attacker@example.com"),
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.other_user.refresh_from_db()
+        self.assertEqual(self.other_user.email, original_email)
+        self.assertEqual(self.other_user.password, original_password)
+
+    def test_anonymous_user_is_redirected_from_profile_update(self) -> None:
+        response = self.client.post(
+            reverse(
+                "users:user_update",
+                kwargs={"username": self.user.username},
+            ),
+            data=self.profile_payload(),
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:login"),
+            fetch_redirect_response=False,
+        )
+
+
+class AvatarChangeSecurityTest(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(
+            username="owner",
+            email="owner@example.com",
+            password="OwnerPass12345!",
+            role="user",
+            avatar_image="https://example.com/old.jpg",
+        )
+        self.other_user = User.objects.create_user(
+            username="other",
+            email="other@example.com",
+            password="OtherPass12345!",
+            role="user",
+            avatar_image="https://example.com/other-old.jpg",
+        )
+
+    def avatar_url(self, username: str) -> str:
+        return reverse("users:avatar_update", kwargs={"username": username})
+
+    def test_user_can_change_own_avatar(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            self.avatar_url(self.user.username),
+            data={"avatar_image": "https://example.com/new.jpg"},
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_image, "https://example.com/new.jpg")
+
+    def test_user_cannot_change_someone_elses_avatar(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            self.avatar_url(self.other_user.username),
+            data={"avatar_image": "javascript:alert(1)"},
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:user_cabinet"),
+            fetch_redirect_response=False,
+        )
+        self.other_user.refresh_from_db()
+        self.assertEqual(
+            self.other_user.avatar_image,
+            "https://example.com/other-old.jpg",
+        )
+
+    def test_anonymous_user_is_redirected_from_avatar_change(self) -> None:
+        response = self.client.post(
+            self.avatar_url(self.user.username),
+            data={"avatar_image": "https://example.com/new.jpg"},
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("users:login"),
+            fetch_redirect_response=False,
+        )

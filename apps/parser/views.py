@@ -5,6 +5,7 @@ from asgiref.sync import async_to_sync
 from django.contrib import messages
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404
 from django.urls import reverse_lazy
 from django.utils import timezone
@@ -23,7 +24,8 @@ from apps.parser.types import (
     ParsedChannelResult,
     normalize_channel_data,
 )
-from apps.parser.utils import get_telegram_credentials
+from apps.parser.utils import get_telegram_credentials, normalize_channel_username
+from apps.admin.moderation.models import ModerationRequest
 from config.mixins import UserAuthenticationCheckMixin
 from config.renderers import render_inertia_from_dto
 
@@ -45,6 +47,16 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
             api_id,
             api_hash,
         )
+
+    def find_existing_channel(
+        self, channel_identifier: str
+    ) -> TelegramChannel | None:
+        """Find an existing channel by normalized username."""
+        username = normalize_channel_username(channel_identifier)
+
+        return TelegramChannel.objects.filter(
+        username__iexact=username
+    ).first()
 
     async def async_tg_parser(
         self, url: str, limit: int = 10
@@ -78,6 +90,8 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
         )
 
         if created:
+            channel.is_public = False
+            channel.save(update_fields=["is_public"])
             log.info(f"New channel created: {channel.title}")
         else:
             log.info(f"Channel updated: {channel.title}")
@@ -125,6 +139,15 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
         language = form.cleaned_data["language"]
         country = form.cleaned_data["country"]
         category = form.cleaned_data["category"]
+
+        existing_channel = self.find_existing_channel(identifier)
+
+        if existing_channel:
+            self.request.session["flash"] = {
+                "error": f"Канал {existing_channel.title} уже в каталоге"
+            }
+            return super().form_valid(form)
+    
         log.info(
             f"Начинаем обработку данных для канала; "
             f"- {identifier} лимит - {limit}"
@@ -152,6 +175,16 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
             channel, created = self.save_channel(channel_data)
             self.save_stats(channel, channel_data)
 
+            ModerationRequest.objects.create(
+                submitted_by=self.request.user,
+                channel_identifier=identifier,
+                channel_by=channel,
+                category=category,
+                country=country,
+                language=language,
+                status="pending",
+)
+
             # Generating user message
             message = (
                 f"New channel created: {channel.title}"
@@ -169,6 +202,9 @@ class ParserView(UserAuthenticationCheckMixin, FormView):
 
 class ParserListView(ListView):
     model = TelegramChannel
+
+    def get_queryset(self):
+        return TelegramChannel.objects.filter(is_public=True)
 
     def get(
         self,
@@ -226,9 +262,10 @@ class ChannelLookupView(View):
         if not q:
             return JsonResponse([], safe=False)
 
-        channels = TelegramChannel.objects.filter(
+
+        channels = TelegramChannel.objects.filter(is_public=True).filter(
             Q(title__icontains=q) | Q(username__icontains=q)
-        ).order_by("-participants_count")[:10]
+        )
 
         result = list(
             channels.values(
@@ -237,7 +274,7 @@ class ChannelLookupView(View):
                 "username",
                 "participants_count",
                 "category",
-            )
+            )[:10]
         )
 
         return JsonResponse(result, safe=False)
@@ -253,6 +290,44 @@ class PostAIAnalysisView(View):
         post_data_dict = PostSerializer.get_post_data(post)
 
         props = PostPagePropsDTO(post=PostDataDTO(**post_data_dict))
+
+        return render_inertia_from_dto(
+            request,
+            "PostPage",
+            props=props,
+        )
+
+
+class PostDetailView(View):
+    """
+    Отображает страницу детального разбора поста.
+    Component: PostPage
+    Props:
+        post (PostDataDTO): Полные данные поста (text, hashtags, метрики)
+        channel (dict): Сводка по каналу, включающая основные параметры.
+        csrfToken (str): CSRF токен для безопасности.
+    URL:
+        /post/<channel_id>/<telegram_message_id>/
+    """
+
+    def get(
+        self, request: HttpRequest, channel_id: int, telegram_message_id: int
+    ) -> HttpResponse:
+        post = get_object_or_404(
+            Post.objects.select_related("channel"),
+            channel_id=channel_id,
+            telegram_message_id=telegram_message_id,
+        )
+
+        post_data_dict = PostSerializer.get_post_data(post)
+
+        post_dto = PostDataDTO(**post_data_dict)
+
+        channel_data = post.channel.get_data()
+
+        props = PostPagePropsDTO(
+            post=post_dto, channel=channel_data, csrfToken=get_token(request)
+        )
 
         return render_inertia_from_dto(
             request,
