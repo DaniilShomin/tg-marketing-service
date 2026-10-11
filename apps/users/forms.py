@@ -240,6 +240,18 @@ class UserUpdateForm(forms.ModelForm):
         ),
     )
 
+    def clean_email(self) -> str:
+        email = self.cleaned_data["email"].strip().lower()
+        if (
+            User.objects.filter(email__iexact=email)
+            .exclude(pk=self.instance.pk)
+            .exists()
+        ):
+            raise forms.ValidationError(
+                "Пользователь с таким email уже существует."
+            )
+        return email
+
     def clean(self) -> dict[str, Any]:
         cleaned_data: dict[str, Any] = super().clean() or {}
         password1 = cleaned_data.get("password1")
