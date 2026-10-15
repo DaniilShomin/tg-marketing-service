@@ -6,6 +6,7 @@ from django.shortcuts import redirect
 from django.views import View
 from inertia import InertiaResponse
 
+from apps.admin.moderation.services.admin_channels import AdminChannelsService
 from apps.admin.moderation.services.moderation import (
     ModerationError,
     ModerationService,
@@ -79,3 +80,18 @@ class ModerationRequestListView(AdminRequiredMixin, View):
 
         url = request.get_full_path()
         return redirect(url)
+
+
+class AdminChannelsView(AdminRequiredMixin, View):
+    def get(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InertiaResponse:
+        dto = AdminChannelsService.build_dto()
+        return render_inertia_from_dto(
+            request,
+            "AdminChannels",
+            props=dto,
+        )
