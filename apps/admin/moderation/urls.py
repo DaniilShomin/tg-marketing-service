@@ -23,9 +23,9 @@ urlpatterns = [
         name="channel_verified",
     ),
     path(
-    "channels/add/",
-    AdminChannelAddView.as_view(),
-    name="channel_add",
+        "channels/add/",
+        AdminChannelAddView.as_view(),
+        name="channel_add",
     ),
     path(
         "channels/category/",
