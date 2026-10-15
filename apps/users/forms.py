@@ -11,21 +11,17 @@ from django.contrib.auth.forms import (
 from django.contrib.auth.password_validation import validate_password
 from django.utils.crypto import get_random_string
 
-from apps.users.models import User
+from apps.users.models import NotificationSettings, User
 
 
 class UserLoginForm(AuthenticationForm):
-    class Meta:
-        model = User
-        fields = ["username", "password"]
-
-    username = forms.CharField(
-        label="Имя пользователя",
-        widget=forms.TextInput(
+    email = forms.EmailField(
+        label="Email",
+        widget=forms.EmailInput(
             attrs={
                 "autofocus": True,
                 "class": "form-control",
-                "placeholder": "Имя пользователя",
+                "placeholder": "Email",
             }
         ),
     )
@@ -39,6 +35,22 @@ class UserLoginForm(AuthenticationForm):
             }
         ),
     )
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.fields.pop("username")
+
+    def clean(self) -> dict[str, Any]:
+        email = self.cleaned_data.get("email")
+        password = self.cleaned_data.get("password")
+        if email and password:
+            try:
+                user = User.objects.get(email__iexact=email)
+            except (User.DoesNotExist, User.MultipleObjectsReturned):
+                User().set_password(password)
+                raise self.get_invalid_login_error() from None
+            self.cleaned_data["username"] = user.username
+        return super().clean() or {}
 
 
 class UserRegForm(UserCreationForm):
@@ -113,7 +125,10 @@ class UserRegForm(UserCreationForm):
         ),
     )
     terms = forms.BooleanField(
-        required=False,
+        required=True,
+        error_messages={
+            "required": "Consent to personal data processing is required."
+        },
         widget=forms.CheckboxInput(
             attrs={
                 "class": "form-check-input",
@@ -225,6 +240,18 @@ class UserUpdateForm(forms.ModelForm):
         ),
     )
 
+    def clean_email(self) -> str:
+        email = self.cleaned_data["email"].strip().lower()
+        if (
+            User.objects.filter(email__iexact=email)
+            .exclude(pk=self.instance.pk)
+            .exists()
+        ):
+            raise forms.ValidationError(
+                "Пользователь с таким email уже существует."
+            )
+        return email
+
     def clean(self) -> dict[str, Any]:
         cleaned_data: dict[str, Any] = super().clean() or {}
         password1 = cleaned_data.get("password1")
@@ -247,6 +274,18 @@ class UserUpdateForm(forms.ModelForm):
             user.save()
             self.save_m2m()
         return user
+
+
+class NotificationSettingsForm(forms.ModelForm):
+    """Форма изменения настроек уведомлений пользователя."""
+
+    class Meta:
+        model = NotificationSettings
+        fields = (
+            "weekly_reports",
+            "trend_notifications",
+            "new_features",
+        )
 
 
 class AvatarChange(UserChangeForm):

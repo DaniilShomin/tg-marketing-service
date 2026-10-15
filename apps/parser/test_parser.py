@@ -2,11 +2,18 @@ import os
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 import pytest
+from django.contrib.auth import get_user_model
+from django.contrib.messages.middleware import MessageMiddleware
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpResponse
+from django.test import RequestFactory
 from django.test.utils import override_settings
 
+from apps.admin.moderation.models import ModerationRequest
 from apps.parser.models import TelegramChannel
 from apps.parser.tasks import parse_channel
 from apps.parser.utils import get_telegram_credentials
@@ -134,3 +141,129 @@ def test_parse_channel_raises_without_telegram_credentials() -> None:
         ImproperlyConfigured, match="Нет конфигурации для Telegram API"
     ):
         parse_channel(channel.channel_id)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "channel_identifier",
+    [
+        "@Example_Channel",
+        "Example_Channel",
+        "t.me/Example_Channel",
+        "https://t.me/Example_Channel",
+    ],
+)
+def test_parser_view_does_not_parse_existing_channel(
+    channel_identifier: str,
+) -> None:
+    TelegramChannel.objects.create(
+        channel_id=123456789,
+        title="Existing Channel",
+        username="example_channel",
+        participants_count=100,
+    )
+
+    view = ParserView()
+
+    with patch.object(view, "async_tg_parser") as mock_parser:
+        mock_parser.return_value = None
+
+        result = view.find_existing_channel(channel_identifier)
+
+    assert result is not None
+    assert result.username == "example_channel"
+    mock_parser.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_parser_view_notifies_about_existing_channel() -> None:
+    TelegramChannel.objects.create(
+        channel_id=123456789,
+        title="Existing Channel",
+        username="example_channel",
+        participants_count=100,
+    )
+
+    view = ParserView()
+    request = RequestFactory().post("/parser/")
+    view.setup(request)
+
+    SessionMiddleware(lambda request: HttpResponse()).process_request(request)
+    MessageMiddleware(lambda request: HttpResponse()).process_request(request)
+
+    form = view.get_form_class()(
+        data={
+            "channel_identifier": "@Example_Channel",
+            "category": "Технологии",
+            "country": "RU",
+            "language": "ru",
+            "limit": 10,
+        }
+    )
+
+    assert form.is_valid(), form.errors
+
+    with patch("apps.parser.views.async_to_sync") as mock_async_to_sync:
+        response = view.form_valid(form)
+
+    mock_async_to_sync.assert_not_called()
+
+    assert response.status_code == 302
+
+
+@pytest.mark.django_db
+def test_parser_view_creates_pending_moderation_request() -> None:
+    user_model = get_user_model()
+    user = user_model.objects.create_user(
+        username="channel-author",
+        email="author@example.com",
+        password="password",
+        role="user",
+    )
+
+    view = ParserView()
+    request = RequestFactory().post("/parser/")
+    request.user = user
+    SessionMiddleware(lambda request: HttpResponse()).process_request(request)
+    MessageMiddleware(lambda request: HttpResponse()).process_request(request)
+    view.setup(request)
+
+    form = view.get_form_class()(
+        data={
+            "channel_identifier": "@new_channel",
+            "category": "Технологии",
+            "country": "RU",
+            "language": "ru",
+            "limit": 10,
+        }
+    )
+
+    assert form.is_valid(), form.errors
+
+    parsed_data = {
+        "title": "New Channel",
+        "channel_id": 987654321,
+        "username": "new_channel",
+        "verified": False,
+        "creation_date": None,
+        "last_messages": [],
+        "average_views": 0,
+        "participants_count": 100,
+        "description": "New channel",
+        "pinned_messages": [],
+    }
+
+    with patch(
+        "apps.parser.views.async_to_sync",
+        return_value=lambda *args: parsed_data,
+    ):
+        response = view.form_valid(form)
+
+    moderation_request = ModerationRequest.objects.get()
+
+    assert response.status_code == 302
+    assert moderation_request.status == "pending"
+    assert moderation_request.submitted_by == user
+    assert moderation_request.channel_by is not None
+    assert moderation_request.channel_by.channel_id == 987654321
+    assert moderation_request.channel_identifier == "@new_channel"
