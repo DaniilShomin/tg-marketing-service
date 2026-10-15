@@ -154,3 +154,58 @@ class AdminChannelsViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
         channel.refresh_from_db()
         self.assertIsNone(channel.category)
+
+    def test_toggle_verified_enables_verification(self) -> None:
+        self.client.force_login(self.admin)
+        channel = TelegramChannel.objects.create(
+            channel_id=2006,
+            username="verified_enable_test",
+            title="Verified enable test",
+            is_verified=False,
+        )
+
+        response = self.client.post(
+            reverse("admin_moderation:channel_verified"),
+            {"channel_id": channel.channel_id},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        channel.refresh_from_db()
+        self.assertTrue(channel.is_verified)
+        self.assertIsNotNone(channel.verified_at)
+
+    def test_toggle_verified_disables_verification(self) -> None:
+        self.client.force_login(self.admin)
+        channel = TelegramChannel.objects.create(
+            channel_id=2007,
+            username="verified_disable_test",
+            title="Verified disable test",
+            is_verified=True,
+        )
+
+        response = self.client.post(
+            reverse("admin_moderation:channel_verified"),
+            {"channel_id": channel.channel_id},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        channel.refresh_from_db()
+        self.assertFalse(channel.is_verified)
+        self.assertIsNone(channel.verified_at)
+
+    def test_toggle_verified_requires_admin(self) -> None:
+        channel = TelegramChannel.objects.create(
+            channel_id=2008,
+            username="verified_rbac_test",
+            title="Verified RBAC test",
+            is_verified=False,
+        )
+
+        response = self.client.post(
+            reverse("admin_moderation:channel_verified"),
+            {"channel_id": channel.channel_id},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        channel.refresh_from_db()
+        self.assertFalse(channel.is_verified)

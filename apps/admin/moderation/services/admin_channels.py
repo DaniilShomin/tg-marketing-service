@@ -1,3 +1,5 @@
+from django.utils import timezone
+
 from apps.admin.moderation.dto.admin_channels_dto import (
     AdminChannelData,
     AdminChannelsDTO,
@@ -37,6 +39,13 @@ class AdminChannelsService:
         channel = TelegramChannel.objects.get(channel_id=channel_id)
         channel.category = category
         channel.save(update_fields=["category"])
+
+    @staticmethod
+    def toggle_verified(channel_id: int) -> None:
+        channel = TelegramChannel.objects.get(channel_id=channel_id)
+        channel.is_verified = not channel.is_verified
+        channel.verified_at = timezone.now() if channel.is_verified else None
+        channel.save(update_fields=["is_verified", "verified_at"])
 
     @classmethod
     def build_dto(cls) -> AdminChannelsDTO:
