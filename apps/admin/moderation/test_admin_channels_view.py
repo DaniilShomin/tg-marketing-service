@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.urls import reverse
 
@@ -209,3 +211,101 @@ class AdminChannelsViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
         channel.refresh_from_db()
         self.assertFalse(channel.is_verified)
+
+    @patch(
+        "apps.admin.moderation.services.admin_channels."
+        "AdminChannelsService._fetch_channel"
+    )
+    def test_add_channel_creates_approved_channel(
+        self,
+        fetch_channel,
+    ) -> None:
+        self.client.force_login(self.admin)
+        fetch_channel.return_value = {
+            "channel_id": 3001,
+            "username": "new_admin_channel",
+            "title": "New admin channel",
+        }
+
+        response = self.client.post(
+            reverse("admin_moderation:channel_add"),
+            {
+                "identifier": "@new_admin_channel",
+                "category": "Технологии",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        channel = TelegramChannel.objects.get(channel_id=3001)
+        self.assertEqual(channel.username, "new_admin_channel")
+        self.assertEqual(channel.category, "Технологии")
+
+        moderation_request = ModerationRequest.objects.get(
+            channel_by=channel,
+        )
+        self.assertEqual(moderation_request.status, "approved")
+        self.assertEqual(moderation_request.submitted_by, self.admin)
+        self.assertEqual(moderation_request.moderator, self.admin)
+
+    @patch(
+        "apps.admin.moderation.services.admin_channels."
+        "AdminChannelsService._fetch_channel"
+    )
+    def test_add_channel_rejects_duplicate_username(
+        self,
+        fetch_channel,
+    ) -> None:
+        self.client.force_login(self.admin)
+        TelegramChannel.objects.create(
+            channel_id=3002,
+            username="existing_admin_channel",
+            title="Existing admin channel",
+        )
+        fetch_channel.return_value = {
+            "channel_id": 3003,
+            "username": "existing_admin_channel",
+            "title": "Duplicate admin channel",
+        }
+
+        response = self.client.post(
+            reverse("admin_moderation:channel_add"),
+            {
+                "identifier": "@existing_admin_channel",
+                "category": "Технологии",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            TelegramChannel.objects.filter(
+                username__iexact="existing_admin_channel",
+            ).count(),
+            1,
+        )
+        self.assertFalse(
+            ModerationRequest.objects.filter(
+                channel_identifier="@existing_admin_channel",
+                status="approved",
+            ).exists(),
+        )
+
+    @patch(
+        "apps.admin.moderation.services.admin_channels."
+        "AdminChannelsService._fetch_channel"
+    )
+    def test_add_channel_requires_admin(self, fetch_channel) -> None:
+        response = self.client.post(
+            reverse("admin_moderation:channel_add"),
+            {
+                "identifier": "@forbidden_channel",
+                "category": "Технологии",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        fetch_channel.assert_not_called()
+        self.assertFalse(
+            TelegramChannel.objects.filter(
+                username="forbidden_channel",
+            ).exists(),
+        )

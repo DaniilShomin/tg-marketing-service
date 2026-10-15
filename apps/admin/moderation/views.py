@@ -140,3 +140,29 @@ class AdminChannelVerifiedView(AdminRequiredMixin, View):
             return HttpResponseBadRequest("Канал не найден")
 
         return redirect("admin_channels")
+
+
+class AdminChannelAddView(AdminRequiredMixin, View):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponse:
+        identifier = request.POST.get("identifier", "")
+        category = request.POST.get("category", "")
+
+        try:
+            AdminChannelsService.add_channel(
+                identifier=identifier,
+                category=category,
+                admin=request.user,
+            )
+        except ValueError as error:
+            return HttpResponseBadRequest(str(error))
+        except Exception:
+            return HttpResponseBadRequest(
+                "Не удалось получить данные канала из Telegram"
+            )
+
+        return redirect("admin_channels")

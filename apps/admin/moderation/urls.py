@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.admin.moderation.views import (
+    AdminChannelAddView,
     AdminChannelCategoryView,
     AdminChannelsView,
     AdminChannelVerifiedView,
@@ -20,6 +21,11 @@ urlpatterns = [
         "channels/verified/",
         AdminChannelVerifiedView.as_view(),
         name="channel_verified",
+    ),
+    path(
+    "channels/add/",
+    AdminChannelAddView.as_view(),
+    name="channel_add",
     ),
     path(
         "channels/category/",
