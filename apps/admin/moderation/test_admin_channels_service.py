@@ -57,3 +57,28 @@ class AdminChannelsServiceTests(TestCase):
         channels = list(AdminChannelsService.get_channels())
 
         self.assertEqual(channels.count(self.approved_channel), 1)
+
+    def test_update_category_saves_valid_category(self) -> None:
+        category = next(
+            value
+            for value in AdminChannelsService.get_categories()
+            if value == "Технологии"
+        )
+
+        AdminChannelsService.update_category(
+            self.approved_channel.channel_id,
+            category,
+        )
+
+        self.approved_channel.refresh_from_db()
+        self.assertEqual(self.approved_channel.category, category)
+
+    def test_update_category_rejects_invalid_category(self) -> None:
+        with self.assertRaises(ValueError):
+            AdminChannelsService.update_category(
+                self.approved_channel.channel_id,
+                "Несуществующая категория",
+            )
+
+        self.approved_channel.refresh_from_db()
+        self.assertIsNone(self.approved_channel.category)

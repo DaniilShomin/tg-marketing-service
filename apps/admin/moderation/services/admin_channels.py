@@ -30,6 +30,15 @@ class AdminChannelsService:
         ]
 
     @classmethod
+    def update_category(cls, channel_id: int, category: str) -> None:
+        if category not in cls.get_categories():
+            raise ValueError("Недопустимая категория")
+
+        channel = TelegramChannel.objects.get(channel_id=channel_id)
+        channel.category = category
+        channel.save(update_fields=["category"])
+
+    @classmethod
     def build_dto(cls) -> AdminChannelsDTO:
         channels = [
             AdminChannelData(

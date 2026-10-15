@@ -15,6 +15,7 @@ from apps.admin.moderation.services.moderation_service import (
     ModerationListService,
 )
 from apps.admin.moderation.services.queue import ModerationQueue
+from apps.parser.models import TelegramChannel
 from apps.users.models import User
 from config.mixins import AdminRequiredMixin
 from config.renderers import render_inertia_from_dto
@@ -95,3 +96,27 @@ class AdminChannelsView(AdminRequiredMixin, View):
             "AdminChannels",
             props=dto,
         )
+
+
+class AdminChannelCategoryView(AdminRequiredMixin, View):
+    def post(
+        self,
+        request: HttpRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> HttpResponse:
+        try:
+            channel_id = int(request.POST.get("channel_id", ""))
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("Некорректный идентификатор канала")
+
+        category = request.POST.get("category", "")
+
+        try:
+            AdminChannelsService.update_category(channel_id, category)
+        except ValueError as error:
+            return HttpResponseBadRequest(str(error))
+        except TelegramChannel.DoesNotExist:
+            return HttpResponseBadRequest("Канал не найден")
+
+        return redirect("admin_channels")

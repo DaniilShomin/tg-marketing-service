@@ -85,3 +85,72 @@ class AdminChannelsViewTests(TestCase):
             payload["props"]["categories"],
         )
         self.assertNotIn("Все категории", payload["props"]["categories"])
+
+    def test_update_category_saves_valid_category(self) -> None:
+        self.client.force_login(self.admin)
+        channel = TelegramChannel.objects.create(
+            channel_id=2003,
+            username="category_update_test",
+            title="Category update test",
+            category="Новости и СМИ",
+        )
+        ModerationRequest.objects.create(
+            submitted_by=self.admin,
+            channel_identifier="@category_update_test",
+            channel_by=channel,
+            category="Новости и СМИ",
+            country="Россия",
+            language="Русский",
+            status="approved",
+        )
+
+        response = self.client.post(
+            reverse("admin_moderation:channel_category"),
+            {
+                "channel_id": channel.channel_id,
+                "category": "Технологии",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        channel.refresh_from_db()
+        self.assertEqual(channel.category, "Технологии")
+
+    def test_update_category_rejects_invalid_category(self) -> None:
+        self.client.force_login(self.admin)
+        channel = TelegramChannel.objects.create(
+            channel_id=2004,
+            username="invalid_category_test",
+            title="Invalid category test",
+            category="Новости и СМИ",
+        )
+
+        response = self.client.post(
+            reverse("admin_moderation:channel_category"),
+            {
+                "channel_id": channel.channel_id,
+                "category": "Несуществующая категория",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        channel.refresh_from_db()
+        self.assertEqual(channel.category, "Новости и СМИ")
+
+    def test_update_category_requires_admin(self) -> None:
+        channel = TelegramChannel.objects.create(
+            channel_id=2005,
+            username="category_rbac_test",
+            title="Category RBAC test",
+        )
+        response = self.client.post(
+            reverse("admin_moderation:channel_category"),
+            {
+                "channel_id": channel.channel_id,
+                "category": "Технологии",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        channel.refresh_from_db()
+        self.assertIsNone(channel.category)
