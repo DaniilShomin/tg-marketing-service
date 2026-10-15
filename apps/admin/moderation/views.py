@@ -152,11 +152,15 @@ class AdminChannelAddView(AdminRequiredMixin, View):
         identifier = request.POST.get("identifier", "")
         category = request.POST.get("category", "")
 
+        admin = request.user
+        if not isinstance(admin, User):
+            return HttpResponseBadRequest("Некорректный пользователь")
+
         try:
             AdminChannelsService.add_channel(
                 identifier=identifier,
                 category=category,
-                admin=request.user,
+                admin=admin,
             )
         except ValueError as error:
             return HttpResponseBadRequest(str(error))

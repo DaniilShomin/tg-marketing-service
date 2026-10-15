@@ -1,3 +1,5 @@
+from typing import cast
+
 from asgiref.sync import async_to_sync
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -31,11 +33,16 @@ class AdminChannelsService:
 
     @staticmethod
     def get_categories() -> list[str]:
+        choices = cast(
+            list[tuple[str, str]],
+            getattr(
+                ChannelParseForm.base_fields["category"],
+                "choices",
+            ),
+        )
         return [
             value
-            for value, _label in (
-                ChannelParseForm.base_fields["category"].choices
-            )
+            for value, _label in choices
             if value not in ("Выберите категорию...", "Все категории")
         ]
 
