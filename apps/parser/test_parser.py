@@ -6,8 +6,10 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.messages.storage.fallback import FallbackStorage
+from django.contrib.messages.middleware import MessageMiddleware
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import override_settings
 
@@ -186,8 +188,8 @@ def test_parser_view_notifies_about_existing_channel() -> None:
     request = RequestFactory().post("/parser/")
     view.setup(request)
 
-    request.session = {}  # type: ignore[assignment]
-    request._messages = FallbackStorage(request)  # type: ignore[attr-defined]
+    SessionMiddleware(lambda request: HttpResponse()).process_request(request)
+    MessageMiddleware(lambda request: HttpResponse()).process_request(request)
 
     form = view.get_form_class()(
         data={
@@ -222,8 +224,8 @@ def test_parser_view_creates_pending_moderation_request() -> None:
     view = ParserView()
     request = RequestFactory().post("/parser/")
     request.user = user
-    request.session = {}  # type: ignore[assignment]
-    request._messages = FallbackStorage(request)  # type: ignore[attr-defined]
+    SessionMiddleware(lambda request: HttpResponse()).process_request(request)
+    MessageMiddleware(lambda request: HttpResponse()).process_request(request)
     view.setup(request)
 
     form = view.get_form_class()(
