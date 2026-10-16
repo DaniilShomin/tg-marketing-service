@@ -19,7 +19,7 @@ from django.contrib import admin
 from django.urls import include, path
 from django.views.generic import TemplateView
 
-from apps.group_channels.views import CollectionsCatalogView
+from apps.group_channels.views import CollectionsCatalogView, GroupDetailView
 from config.views import IndexView
 
 urlpatterns = [
@@ -28,6 +28,11 @@ urlpatterns = [
         "collections/",
         CollectionsCatalogView.as_view(),
         name="collections_catalog",
+    ),
+    path(
+        "collections/<slug:slug>/",
+        GroupDetailView.as_view(),
+        name="collection_detail",
     ),
     path("dashboard/", include("apps.homepage.urls")),
     path("auth/", include("apps.users.urls")),
