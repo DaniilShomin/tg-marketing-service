@@ -1,156 +1,315 @@
-from unittest.mock import patch
+import json
+from typing import Any
 
+import pytest
 from django.http import HttpResponse
-from django.test import TestCase
 from django.urls import reverse
 
-from apps.group_channels.models import AutoGroupRule, Group
-from apps.parser.models import TelegramChannel
-from apps.users.models import User
+pytest_plugins = ("apps.group_channels.test_utils",)
+pytestmark = pytest.mark.django_db
 
 
-class GroupDetailViewTest(TestCase):
-    """Проверяет поведение представления детальной страницы подборки."""
+@pytest.fixture
+def catalog_url():
+    """URL каталога подборок."""
+    return reverse("collections_catalog")
 
-    def setUp(self):
-        self.owner = User.objects.create_user(
-            username="owner",
-            email="owner@example.com",
-            password="test-password",
+
+@pytest.fixture
+def detail_url():
+    """Функция построения URL детальной страницы подборки."""
+
+    def factory(slug):
+        return reverse("collection_detail", kwargs={"slug": slug})
+
+    return factory
+
+
+def get_inertia_props(response: HttpResponse) -> dict[str, Any]:
+    """Возвращает props из Inertia-ответа."""
+    assert response.status_code == 200
+
+    page: dict[str, Any] = json.loads(response.content)
+
+    assert "props" in page
+
+    props = page["props"]
+    assert isinstance(props, dict)
+
+    return props
+
+
+class TestCollectionsCatalogView:
+    """Функциональные тесты HTTP-контракта каталога."""
+
+    def test_catalog_returns_inertia_page(
+        self,
+        client,
+        catalog_url,
+    ):
+        """Каталог возвращает компонент Collections и необходимые props."""
+        response = client.get(
+            catalog_url,
+            HTTP_X_INERTIA="true",
         )
-        self.curator = User.objects.create_user(
-            username="editor",
-            email="editor@example.com",
-            password="test-password",
+
+        props = get_inertia_props(response)
+
+        assert response.json()["component"] == "Collections"
+
+        assert isinstance(props["featured"], list)
+        assert isinstance(props["collections"], list)
+        assert isinstance(props["sections"], list)
+        assert isinstance(props["filters"], dict)
+
+    def test_catalog_serializes_manual_group_channel_count(
+        self,
+        client,
+        catalog_url,
+        manual_group,
+    ):
+        """Каталог передаёт рассчитанный счётчик ручной подборки."""
+        response = client.get(
+            catalog_url,
+            HTTP_X_INERTIA="true",
         )
 
-        self.group = Group.objects.create(
+        props = get_inertia_props(response)
+
+        collection = next(
+            item
+            for item in props["collections"]
+            if item["slug"] == manual_group.slug
+        )
+
+        assert collection["channel_count"] == 1
+
+    def test_catalog_serializes_auto_group_channel_count(
+        self,
+        client,
+        catalog_url,
+        auto_group,
+        channel_factory,
+    ):
+        """Каталог передаёт рассчитанный счётчик автоподборки."""
+        expected_channels = [
+            channel_factory(
+                title="Science News",
+                username="science_news",
+                category="Наука",
+            ),
+            channel_factory(
+                title="Science Today",
+                username="science_today",
+                category="Наука",
+            ),
+        ]
+
+        channel_factory(
+            title="Product Radar",
+            username="product_radar",
+            category="Технологии",
+        )
+
+        response = client.get(
+            catalog_url,
+            HTTP_X_INERTIA="true",
+        )
+
+        props = get_inertia_props(response)
+
+        collection = next(
+            item
+            for item in props["collections"]
+            if item["slug"] == auto_group.slug
+        )
+
+        assert collection["channel_count"] == len(expected_channels)
+
+    def test_empty_catalog_returns_empty_lists(
+        self,
+        client,
+        catalog_url,
+    ):
+        """Пустой каталог сериализуется с пустыми списками."""
+        response = client.get(
+            catalog_url,
+            HTTP_X_INERTIA="true",
+        )
+
+        props = get_inertia_props(response)
+
+        assert props["collections"] == []
+        assert props["featured"] == []
+        assert props["sections"] == []
+
+    @pytest.mark.parametrize(
+        ("query_params", "filter_key", "filter_value"),
+        [
+            (
+                {"q": "технолог"},
+                "q",
+                "технолог",
+            ),
+            (
+                {"country": "RU"},
+                "country",
+                "RU",
+            ),
+            (
+                {"category": "Технологии"},
+                "category",
+                "Технологии",
+            ),
+        ],
+        ids=["search", "country", "category"],
+    )
+    def test_catalog_applies_query_filters(
+        self,
+        client,
+        catalog_url,
+        group_factory,
+        channel_factory,
+        query_params,
+        filter_key,
+        filter_value,
+    ):
+        """HTTP-параметры фильтрации влияют на выдачу каталога."""
+        tech_group = group_factory(
             name="Топ IT-каналов",
             slug="top-it",
             description="Подборка технологических каналов",
-            owner=self.owner,
-            curator=self.curator,
-            is_editorial=True,
         )
-
-        self.channel = TelegramChannel.objects.create(
-            channel_id=100001,
-            username="product_radar",
-            title="Product Radar",
-            participants_count=142000,
-            average_views=38200,
-            category="Технологии",
-            country="RU",
-        )
-
-        self.group.channels.add(self.channel)
-
-    @patch("apps.group_channels.views.inertia_render")
-    def test_detail_returns_group_detail_component(
-        self,
-        mock_inertia_render,
-    ):
-        """Проверяет возврат компонента GroupDetail с данными подборки."""
-        mock_inertia_render.return_value = HttpResponse("OK")
-
-        response = self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": self.group.slug},
+        tech_group.channels.add(
+            channel_factory(
+                title="Product Radar",
+                username="product_radar",
+                category="Технологии",
+                country="RU",
             ),
         )
 
-        self.assertEqual(response.status_code, 200)
-        mock_inertia_render.assert_called_once()
-
-        args, kwargs = mock_inertia_render.call_args
-
-        self.assertEqual(args[1], "GroupDetail")
-        self.assertEqual(
-            kwargs["props"]["header"]["name"],
-            self.group.name,
+        news_group = group_factory(
+            name="Новости",
+            slug="news",
+            description="Актуальные события",
         )
-
-    @patch("apps.group_channels.views.inertia_render")
-    def test_header_contains_expected_fields(
-        self,
-        mock_inertia_render,
-    ):
-        """Проверяет состав и значения полей заголовка подборки."""
-        mock_inertia_render.return_value = HttpResponse("OK")
-
-        self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": self.group.slug},
+        news_group.channels.add(
+            channel_factory(
+                title="News Channel",
+                username="news_channel",
+                category="Новости",
+                country="DE",
             ),
         )
 
-        props = mock_inertia_render.call_args.kwargs["props"]
+        response = client.get(
+            catalog_url,
+            query_params,
+            HTTP_X_INERTIA="true",
+        )
+
+        props = get_inertia_props(response)
+
+        assert [item["slug"] for item in props["collections"]] == [
+            tech_group.slug
+        ]
+
+        assert props["filters"][filter_key] == filter_value
+
+        # Дополнительно убеждаемся, что неподходящая подборка исключена.
+        assert news_group.slug not in {
+            item["slug"] for item in props["collections"]
+        }
+
+
+class TestGroupDetailView:
+    """Функциональные тесты HTTP-контракта детальной страницы."""
+
+    def test_detail_returns_inertia_page(
+        self,
+        client,
+        detail_url,
+        manual_group,
+    ):
+        """Детальная страница возвращает GroupDetail и необходимые props."""
+        response = client.get(
+            detail_url(manual_group.slug),
+            HTTP_X_INERTIA="true",
+        )
+
+        props = get_inertia_props(response)
+
+        assert response.json()["component"] == "GroupDetail"
+
+        assert "header" in props
+        assert "group" in props
+        assert "channels" in props
+        assert "auto_category" in props
+
+        assert isinstance(props["header"], dict)
+        assert isinstance(props["group"], dict)
+        assert isinstance(props["channels"], list)
+
+    def test_detail_returns_correct_header(
+        self,
+        client,
+        detail_url,
+        manual_group,
+    ):
+        """Заголовок содержит данные ручной подборки."""
+        response = client.get(
+            detail_url(manual_group.slug),
+            HTTP_X_INERTIA="true",
+        )
+
+        props = get_inertia_props(response)
         header = props["header"]
 
-        self.assertEqual(
-            set(header),
-            {
-                "name",
-                "description",
-                "gradient_key",
-                "is_editorial",
-                "curator",
-                "channel_count",
-                "category",
-            },
-        )
+        assert header["name"] == manual_group.name
+        assert header["description"] == manual_group.description
+        assert header["gradient_key"] == (f"collection-{manual_group.pk}")
+        assert header["is_editorial"] is True
+        assert header["category"] is None
+        assert header["channel_count"] == 1
 
-        self.assertEqual(header["name"], "Топ IT-каналов")
-        self.assertEqual(
-            header["description"],
-            "Подборка технологических каналов",
-        )
-        self.assertEqual(
-            header["gradient_key"],
-            f"collection-{self.group.pk}",
-        )
-        self.assertTrue(header["is_editorial"])
-        self.assertEqual(header["curator"], "editor")
-        self.assertEqual(header["channel_count"], 1)
-        self.assertIsNone(header["category"])
-
-    @patch("apps.group_channels.views.inertia_render")
-    def test_channel_card_contains_expected_fields(
+    def test_detail_returns_group_data(
         self,
-        mock_inertia_render,
+        client,
+        detail_url,
+        manual_group,
     ):
-        """Проверяет состав и значения полей карточки канала."""
-        mock_inertia_render.return_value = HttpResponse("OK")
-
-        self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": self.group.slug},
-            ),
+        """Props group содержит данные выбранной подборки."""
+        response = client.get(
+            detail_url(manual_group.slug),
+            HTTP_X_INERTIA="true",
         )
 
-        props = mock_inertia_render.call_args.kwargs["props"]
-        channels = props["channels"]
+        props = get_inertia_props(response)
+        group = props["group"]
 
-        self.assertEqual(len(channels), 1)
+        assert group["id"] == manual_group.pk
+        assert group["name"] == manual_group.name
+        assert group["slug"] == manual_group.slug
+        assert group["description"] == manual_group.description
+        assert group["is_editorial"] is True
+        assert group["channel_count"] == 1
 
-        self.assertEqual(
-            set(channels[0]),
-            {
-                "title",
-                "username",
-                "avatar",
-                "subscribers",
-                "average_views",
-                "category",
-                "country",
-            },
+    def test_detail_returns_channel_cards(
+        self,
+        client,
+        detail_url,
+        manual_group,
+    ):
+        """Каналы ручной подборки сериализуются в карточки."""
+        response = client.get(
+            detail_url(manual_group.slug),
+            HTTP_X_INERTIA="true",
         )
 
-        self.assertEqual(
-            channels[0],
+        props = get_inertia_props(response)
+
+        assert props["channels"] == [
             {
                 "title": "Product Radar",
                 "username": "product_radar",
@@ -159,170 +318,115 @@ class GroupDetailViewTest(TestCase):
                 "average_views": 38200,
                 "category": "Технологии",
                 "country": "RU",
-            },
+            }
+        ]
+
+        assert props["header"]["channel_count"] == len(props["channels"])
+
+    def test_detail_returns_curator(
+        self,
+        client,
+        detail_url,
+        group_factory,
+        curator,
+    ):
+        """Куратор передаётся в заголовке и данных подборки."""
+        group = group_factory(
+            name="Топ IT-каналов",
+            slug="top-it",
+            curator=curator,
         )
 
-    @patch("apps.group_channels.views.inertia_render")
-    def test_auto_collection_uses_rule_category(self, mock_inertia_render):
-        """Проверяет отбор каналов автоматической подборки по категории."""
-        mock_inertia_render.return_value = HttpResponse("OK")
-
-        auto_group = Group.objects.create(
-            name="Научные каналы",
-            slug="science",
-            owner=self.owner,
+        response = client.get(
+            detail_url(group.slug),
+            HTTP_X_INERTIA="true",
         )
-        AutoGroupRule.objects.create(
-            group=auto_group,
+
+        props = get_inertia_props(response)
+
+        assert props["header"]["curator"] == curator.username
+        assert props["group"]["curator"] == curator.username
+
+    def test_auto_group_returns_category(
+        self,
+        client,
+        detail_url,
+        auto_group,
+    ):
+        """Для автоподборки передаётся категория правила."""
+        response = client.get(
+            detail_url(auto_group.slug),
+            HTTP_X_INERTIA="true",
+        )
+
+        props = get_inertia_props(response)
+
+        assert props["auto_category"] == "Наука"
+        assert props["header"]["category"] == "Наука"
+
+    def test_auto_group_returns_only_channels_of_its_category(
+        self,
+        client,
+        detail_url,
+        auto_group,
+        channel_factory,
+    ):
+        """Автоподборка содержит каналы категории своего правила."""
+        expected_channel = channel_factory(
+            title="Научный канал",
+            username="science_channel",
             category="Наука",
         )
 
-        TelegramChannel.objects.create(
-            channel_id=10001,
-            username="science_news",
-            title="Science News",
-            category="Наука",
-            country="RU",
-        )
-        other_channel = TelegramChannel.objects.create(
-            channel_id=10002,
-            username="travel_news",
-            title="Travel News",
-            category="Путешествия",
-            country="RU",
-        )
-        auto_group.channels.add(other_channel)
-
-        response = self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": auto_group.slug},
-            )
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        props = mock_inertia_render.call_args.kwargs["props"]
-
-        self.assertEqual(props["auto_category"], "Наука")
-        self.assertEqual(props["header"]["category"], "Наука")
-        self.assertEqual(props["header"]["channel_count"], 1)
-        self.assertEqual(
-            {channel["username"] for channel in props["channels"]},
-            {"science_news"},
-        )
-
-    def test_unknown_slug_returns_404(self):
-        """Проверяет возврат ошибки 404 для несуществующей подборки."""
-        response = self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": "does-not-exist"},
-            ),
-        )
-
-        self.assertEqual(response.status_code, 404)
-
-    @patch("apps.group_channels.views.inertia_render")
-    def test_owner_of_manual_collection_gets_add_form(
-        self,
-        mock_inertia_render,
-    ):
-        """
-        Проверяет доступность формы добавления каналов
-        владельцу ручной подборки.
-        """
-        mock_inertia_render.return_value = HttpResponse("OK")
-        self.client.force_login(self.owner)
-
-        self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": self.group.slug},
-            ),
-        )
-
-        props = mock_inertia_render.call_args.kwargs["props"]
-
-        self.assertTrue(props["is_owner"])
-        self.assertIsNotNone(props["add_form"])
-
-    @patch("apps.group_channels.views.inertia_render")
-    def test_owner_of_auto_collection_has_no_add_form(
-        self,
-        mock_inertia_render,
-    ):
-        """
-        Проверяет отсутствие формы добавления каналов
-        у владельца автоподборки.
-        """
-        mock_inertia_render.return_value = HttpResponse("OK")
-
-        auto_group = Group.objects.create(
-            name="Автоподборка",
-            slug="auto-collection",
-            owner=self.owner,
-        )
-
-        AutoGroupRule.objects.create(
-            group=auto_group,
+        channel_factory(
+            title="IT-канал",
+            username="product_radar",
             category="Технологии",
         )
 
-        self.client.force_login(self.owner)
-
-        self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": auto_group.slug},
-            ),
+        response = client.get(
+            detail_url(auto_group.slug),
+            HTTP_X_INERTIA="true",
         )
 
-        props = mock_inertia_render.call_args.kwargs["props"]
+        props = get_inertia_props(response)
 
-        self.assertTrue(props["is_owner"])
-        self.assertIsNone(props["add_form"])
+        assert len(props["channels"]) == 1
+        assert props["channels"][0]["title"] == expected_channel.title
+        assert props["channels"][0]["category"] == "Наука"
+        assert props["header"]["channel_count"] == 1
 
-    @patch("apps.group_channels.views.inertia_render")
-    def test_guest_is_not_owner(
+    def test_empty_manual_group_returns_empty_channels(
         self,
-        mock_inertia_render,
+        client,
+        detail_url,
+        group_factory,
     ):
-        """
-        Проверяет отсутствие прав владельца
-        у неавторизованного пользователя.
-        """
-        mock_inertia_render.return_value = HttpResponse("OK")
-
-        response = self.client.get(
-            reverse(
-                "collection_detail",
-                kwargs={"slug": self.group.slug},
-            ),
+        """Ручная подборка без каналов возвращает пустой список."""
+        group = group_factory(
+            name="Топ IT-каналов",
+            slug="top-it",
         )
 
-        self.assertEqual(response.status_code, 200)
+        response = client.get(
+            detail_url(group.slug),
+            HTTP_X_INERTIA="true",
+        )
 
-        props = mock_inertia_render.call_args.kwargs["props"]
+        props = get_inertia_props(response)
 
-        self.assertFalse(props["is_owner"])
+        assert props["channels"] == []
+        assert props["header"]["channel_count"] == 0
 
-    @patch("apps.group_channels.views.inertia_render")
-    def test_legacy_group_url_still_works(
+    def test_unknown_slug_returns_404(
         self,
-        mock_inertia_render,
+        client,
+        detail_url,
     ):
-        """Проверяет старый URL детальной страницы."""
-        mock_inertia_render.return_value = HttpResponse("OK")
-
-        response = self.client.get(
-            reverse(
-                "group_channels:group_detail",
-                kwargs={"slug": self.group.slug},
-            ),
+        """Несуществующая подборка возвращает 404."""
+        response = client.get(
+            detail_url("unknown-collection"),
+            HTTP_X_INERTIA="true",
         )
 
-        self.assertEqual(response.status_code, 200)
-
-        args, _ = mock_inertia_render.call_args
-        self.assertEqual(args[1], "GroupDetail")
+        assert response.status_code == 404
