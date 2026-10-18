@@ -224,3 +224,6 @@ uv run pre-commit install
 | `make s` | Генерация Telegram-сессии |
 | `make redis` / `make celery` / `make celery-beat` / `make flower` | Фоновые задачи |
 | `make test` / `make lint` / `make lint-fix` / `make typecheck` | Тесты, линтер и проверка типов |
+
+
+Тестовый ПР не для мерджа
